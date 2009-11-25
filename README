@@ -1,0 +1,105 @@
+
+WHAT IS RIP?
+============
+
+The file "rip" is a perl script which must be executable to work
+correctly. If it is not in this state, do a "chmod 755 rip". It
+is a wrapper for rippers and encoders which provides a common
+interface for ripping any CD audio track and encoding it into
+MP3, Ogg Vorbis, or FLAC. Manual and CDDB based renaming schemes 
+are available for naming and tagging your ripped tracks.
+
+
+WHAT ARE THESE OTHER TARBALLS FOR?
+===================================
+
+The CDDB/CDDB_get perl module tarball is included for convenience's sake
+as it is not likely to be common, yet, and makes the rip script
+that much more enjoyable. It needs to be available on your system 
+before rip will even run, so install those perl module tarballs first
+before you do anything else. Installation is easy, at the prompt do:
+
+tar xzvf CDDB_get-1.66.tar.gz
+cd CDDB_get-1.66
+perl Makefile.PL
+make
+su -c "make install"
+
+That should untar it, cd into the new dir, create something
+makeable, make it, and have  root  run the command "make install"
+to install it.
+
+A similar set of commands can be used on the MP3-Info-0.91.tar.gz 
+tarball to install that perl module as well. This module is used
+by rip to do tagging of MP3 files.
+
+
+INSTALLATION
+============
+
+The installation of rip is simple and covered in the file INSTALLING.
+First, make sure you have the modules CDDB_get and MP3::Info installed.
+Then, installing rip boils down to a "cp" or "mv" of the file "rip" 
+to some place on your $PATH. If you are root, go ahead and place it 
+in /bin or in /usr/bin. It's that simple. If you are not root, put
+it where ever you feel is best. Perhaps in ~/bin/. Where ever you 
+feel like, as long as it is on your $PATH.
+
+You need, at minimum, cdparanoia and one of: bladeenc, lame, or gogo
+installed on your system to rip MP3s. If you want to rip to Ogg Vorbis
+you need the *newest* oggenc from www.vorbis.com installed. If you want
+to rip to flac, then you'll need the newest FLAC from flac.sourceforge.net
+I'm assuming that you will install CDDB_get since I'm providing the 
+tarball for you: it provides the online CDDB lookup -c/--cddb functionality. 
+I am also assuming you'll install the MP3-Info tarball; that provides tagging 
+ability for MP3s and FLACs. Tagging for Ogg Vorbis is provided by the encoder 
+itself: oggenc. 
+
+
+SUPPORTED RIPPERS/ENCODERS
+==========================
+
+Currently, rip supports the following list of CD, MP3, Ogg Vorbis,
+FLAC, CDDB tools, and tagging tools:
+
+cdparanoia
+cdda2wav
+bladeenc
+lame
+gogo
+oggenc
+flac
+notlame
+CDDB_get.pm
+MP3::Info
+
+If you're favorite isn't on the list, just let me know and I'll see
+what I can do. I'm trying to not make rip too bloated (it is already
+some 2500 lines long after all!) so hopefully this list will be
+enough to satisfy the majority.
+
+
+FINAL NOTES
+===========
+
+Once rip is on your $PATH, a "rip --help" will help you learn the
+flags and get you going on ripping your CD collection. It'll
+also warn you if you do not have something important installed
+on your system.
+
+If your new to rip, I suggest using the lazy or superlazy
+rip modes. I use them myself to handle ripping the whole CD,
+naming the files via CDDB, and creating the directory
+structure to store files in.
+
+Just remember "rip -S" is your friend. Er, somethin'...
+
+If you experience any problems, please read the FAQ before
+emailing me. If you find a bug, or cannot figure out something
+about rip, you can email me at smethegj@cs.wisc.edu.
+
+In any case, have a pleasurable rip.
+
+Greg
+
+

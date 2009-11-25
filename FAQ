@@ -1,0 +1,92 @@
+
+This is pretty short at the moment, but if it helps one person,
+then that's good enough reason to at least write this much.
+
+Greg Smethells
+smethegj@cs.wisc.edu
+
+http://www.cs.wisc.edu/~smethegj
+http://rip.sourceforge.net
+
+
+QUESTION AND ANSWER
+===================
+
+Q: Backspace is not working in rip. What can I do?
+
+A: In your ~/.riprc file, change the backspace variable to
+some other key code, for example you might try changing: 
+
+backspace = "^H"  
+
+to
+
+backspace = "^?"
+
+or to whatever characters are printing when you hit
+backspace. That *ought* to work. 
+
+Perl is not very good about dealing with different key codes
+for backspace and this is the best I could do. Suggestions 
+are welcome.
+
+
+
+Q: I have a DVD drive that I want to rip from. What should I do?
+
+A: The device flag can be useful here:  rip -d /dev/dvd
+
+This does not solve all problems, likely, but ought to help
+in some cases. A full command-line using -d would be
+something like:  rip -d /dev/dvd -acT
+
+This of course assumes that /dev/dvd or /dev/hdc or whatever
+the heck you mean to rip from is a valid device within
+the system. 
+
+There was a bug concerning the -d flag, which should be 
+fixed as of rip version 1.01.  If you do not think this
+is the case, as always, email me.
+
+
+
+Q: Can you change XYZ so that it does something different?
+
+A: Yes, I can. Email me and I'll give it some thought.
+
+I don't follow through on every suggestion, but if it sounds
+like it would benefit enough people, I generally take it to heart
+and actually make the change. 
+
+
+
+Q: Can you add flag XYZ to rip?
+
+A: Maybe. I don't know. Email me.
+
+I am trying to keep rip lean and bloat-free, but if you have a
+great suggestion, it might be worth asking.
+
+
+
+Q: Can you add support for XYZ?
+
+A: After I take a look at the encoder, ripper, or CDDB tool
+I can make a better decision. As is generally the case, 
+just email and ask.
+
+
+
+Q: Why doesn't rip default to XYZ?
+
+A: I tried to make decisions that seemed reasonable to me.
+If you believe that rip would be better if the defaults were
+different, then the best thing to do is alias rip to something
+that suits you. If you like LAME, then do:  alias rip='rip -L'
+or change your .riprc file (as of rip version 1.01). I just
+added this, so it may not be robust, but you may add default
+flags to a variable in that file so that you don't have to
+add them each time you use rip at the command-line. Basically
+it is for people who don't know how to alias commands. ;)
+
+

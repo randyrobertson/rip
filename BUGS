@@ -1,0 +1,11 @@
+
+If you have fixes for any bugs, please email them to smethegj@cs.wisc.edu
+
+Known bugs:
+
+None at the moment that I am aware of, but I am the programmer, so
+the bugs never come around when I'm in the area. ;)
+
+If you find a bug, be sure you use the -D flag while you run the
+script, and then send me the /tmp/rip-stderr output file.
+

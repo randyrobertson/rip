@@ -1,0 +1,90 @@
+
+AUTHOR'S NOTES
+
+  This perl script named 'rip' is a wrapper for CD, MP3,
+Ogg Vorbis, and FLAC tools (cdparanoia, bladeenc, lame, gogo,
+flac, and oggenc) that are freely available on the web.
+
+  The script 'rip' will not run if at the very least
+cdparanoia and one of: bladeenc, lame, gogo, oggenc,
+or flac are not installed and available on your PATH. 
+Also, the Perl modules MP3::Info and CDDB_get need to 
+be installed before the script will even run.
+
+  Note, to find out what dirs are on your PATH, do the
+following at a shell prompt:
+
+  echo $PATH
+
+  Your shell will only look for binaries to run in the dirs
+that are mentioned by your PATH which are all the dirs in the
+output of the above commmand.
+
+
+
+HOW TO INSTALL
+
+  Here we shall use the UNIX way of refering to one's home dir
+as  ~  rather than $HOME or /home/greg or the like.
+
+
+  To install rip, simply cp the file to a bin on your PATH, example:
+
+  cp rip ~/bin
+
+
+  The command above will install rip in the bin dir of your home
+directory. If you do not have a bin dir in you home dir, I
+highly recommend creating one there and storing binaries there.
+This is a good organizational practice which is quite common.
+Of course, you will have to make sure that ~/bin is on your PATH.
+
+  If you don't want to worry about the PATH, you can also
+do the following assuming rip is in the current directory:
+
+  ./rip
+
+  This explicitly uses the file rip in the current directory
+(which is short-handed to just ".").
+
+  If you have root access, you can do
+
+  cp rip /bin
+
+OR
+
+  cp rip /usr/bin
+
+
+  Note that the included CDDB/CDDB_get and MP3::Info perl modules are 
+here only for convenience as they're readily available elsewhere, such as
+on http://freshmeat.net. Installation instructions for those modules
+can be found in rip's README file. Please read the README. It is useful.
+
+
+HOW TO MODIFY YOUR PATH
+
+  To add that bin dir to the PATH that your shell script looks through,
+add the following line to your start up script (which is probably the
+file ~/.bashrc if you are using the bash shell):
+
+  export PATH=$PATH:~/bin
+
+
+
+HELP
+
+  To get a help screen from rip do:
+
+  rip -h
+
+OR
+
+  rip --help
+
+
+  That's all there is to it.
+  Enjoy!
+
+
+Greg

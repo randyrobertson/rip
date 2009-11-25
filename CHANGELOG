@@ -1,0 +1,453 @@
+
+rip 1.07
+========
+
+(1) Grrr. This time for sure. Fix the $#%@! quote problem when
+tagging ogg vorbis files. Why exactly did ogg developers decide it 
+would be a "good idea" if tagging was done on the command-line where
+shells could screw up special chars left, right, and sideways.
+Anyway, about a dozen different "fixes" patching this problem came into
+my inbox. I think I have done one that will leave special chars (like
+those german u's) alone but also not screw up on a filename with ' in it.
+We shall see how I fare this time. No credit is going anywhere on this
+one but it sure was nice to have several patch possiblities to choose from.
+Thanks to everyone who gave this some thought. Hopefully I don't have to
+go near this one again.
+
+(2) Another thing people have been beating me over the head about since 
+I started this is whether files should be named using " " or "_" for
+white-space. Now there's a flag to turn on and off the use of underscores 
+while renaming files. Note that now you need to use -n/--nounderscore if you
+do not want underscores in filenames, even if you are using -f/--format.
+Marco von Loon finally motivated me on this one.
+
+(3) No longer append extension to rip temp file because it is useless and
+because when you loop over many CDs, the while loop causes the appension
+of the extension multiple times unless you move it to a very odd part of
+the code. Thanks to Kevin Mulholland. 
+
+(4) No longer remove "-" from dir and file names. Just got a little overzealous 
+removing special chars from names that would cause crashes otherwise. Oh well.A
+Thanks to Marco von Loon.
+
+(5) Kevin Lester caught a rare bug: if the CDDB entry is the empty string
+for some tracks, the parse logic goes into an infinite loop. properNameList
+is now checked for "" and replaces it with "Unknown".
+
+(6) Russel Smith was first to notice that the "-o" flag needs to be appended 
+to the end of the flag list. As the code that did this work was a patch and
+not something I tested, this problem has been around for a while. Good thing
+someone is actually using flac and noticed. Tai Lee suggests removing the
+stdin "-" flag entirely. Anyone know if that is a good idea on all platforms?
+
+(7) Mike Irwin noticed that $dev from ~/.riprc on the first run causes 
+problems and should be tested.
+
+(8) Playlists are now created relative to the inital directory you ran
+rip from. Though he didn't have it quite right, this too was motivated
+by Marco von Loon.
+
+rip 1.06
+========
+
+(1) Added check to song titles returned from CDDB, escaping any quotes 
+to prevent oggenc from bailing out on the command-line from incorrect
+quoting of song titles. Also changed oggenc tag command-line to use
+single quote instead of double quote. Hopefully this will make things
+more robust.
+
+(2) Added track number to MP3 ID3 tags per John Harrold's request.
+
+(3) Added sanity check to make sure $dev, the device variable, is
+always set to at least "/dev/cdrom" in case someone decides to
+use --dev and give no argument. Sigh.
+
+(4) Removed dependence on dd. Buffering was giving no noticable benefit.
+
+(5) Altered which chars are removed when creating filenames. Should
+leave more chars alone now.
+
+(6) Remove encoder paranoia, allowing user to set bitrate to whatever
+they like (was bitrate of 160 kbps). Remove space between " -z 3 "
+in ripper paranoia per Michael Muller's suggestion.
+ 
+rip 1.05
+========
+
+(1) Added support for the encoder notLAME thanks to Markus Trapp
+
+(2) Added support for the ripper cdda2wav 
+
+(3) The "%N" format descriptor is now zero-padded to two positions, 
+    that is: two is 02, five is 05, and eleven is 11
+
+(4) Standard output is automatically flushed so it always appears on screen
+
+
+rip 1.04
+========
+
+There are too many people to mention who sent things in which
+I used. The main changes include:
+
+(1) Using GetOptions and getopts instead of rolling my own
+
+(2) You may now use -M/--many to loop repeatedly through
+the script to rip many CDs in a row
+
+(3) Gone are -N/--number and -A/--artist since now I am making
+available a -f/--format to allow you to specify your own format.
+See the -h/--help output for more information on this one.
+
+(4) No more -a/--all as rip now rips all tracks by default if
+you do not specify what tracks to rip.
+
+(5) You may now do a lazy/superlazy rip on only a specific
+subset of tracks. Just do something like: rip -S 1-3 5 7-10 13
+and rip will do all the normal lazy things, but it will also
+only do them for tracks 1, 2, 3, 5, 7, 8, 9, 10, and 13. 
+
+(6) Fixed the bug that disallows using a fixed bit rate
+during a lazy rip. Now if you say -b 128 during a lazy rip,
+it will use 128 kbps. If you say -q 3 -L during a lazy rip,
+it will use LAME at quality 3.
+
+There are probably more fixes, but I can't think of them right now.
+
+
+rip 1.01
+========
+
+(1) Anders Rosendal suggested that the user be able to define the
+default. I have added a ~/.riprc file that will allow users to define
+some of the default flags and values used in the script. More defaults
+to be added later, as I have time.
+
+(2) Malte Uhl sent in a diff file with some code to allow the
+user to set quality values for variable bit rate encoding
+(available if you're using oggenc or LAME as the encoder).
+
+(3) The lazy and superlazy modes now use variable bit rate for
+encoding if the encoder is LAME or oggenc. The default quality
+for LAME is 3 and the default quality for oggenc is 9. You need
+the newest version of oggenc to use the quality flag "-q" now
+required by lazy/superlazy rips. You may override the quailty
+by using the -q/--quality flag.
+
+(4) Fixed a bug where if you used the --generate flag without
+giving a playlist name or an album title, it would name the
+playlist ".list" (a hidden file). Now it names it "playlist.list"
+by default if you don't give it a name.
+
+(5) Added more things you can tag ogg vorbis' with, such as
+year and genre. Sent in by Chris Hirsch.
+
+(6) Rob Scott suggested that the artist name should be prepended
+to the file name, if so flagged (ArtistName-Track_Name.mp3).
+A flag -A/--artist has been added to rip.
+
+(7) Robin Pollard helped add support for FLAC, a lossless
+encoder. This adds the flag -F/--flac to rip.
+
+(8) Fixed a long standing bug where the incorrect device
+would be ejected/loaded. This also fixes the bug where rip
+would attempt to rip from some device other than the one specified.
+This was also sent in my Robin Pollard.
+
+(9) If there is an error during the rip, the script will still 
+eject the CD tray before terminating.
+
+(10) *May* have fixed the bug: if the CD contains tracks
+that are not audio in nature, rip will error attempting to rip
+that track, and possibly hang.
+
+
+rip 1.00
+========
+
+(1) Jonas Petersson sent in an alteration to the manual
+rename function so that it remembers the previous values
+if you decide you wish to re-enter the entire list due to
+a typing mistake somewhere.
+
+(2) Kianusch Karadji suggested a fix for all system
+commands such that variables are wrapped in quotes
+to prevent failures such as can happen when doing a
+`mkdir ~/My Music` when the dir has spaces in its name.
+
+
+rip 0.99
+========
+(1) Artist names, album titles, and song names now have fairly
+strict schemes that remove non-word characters that UNIX might
+hate to see in a dir or file name.
+
+(2) Many, many little things you might not notice. Do a diff
+with 0.98 if you want to see them. Most I have forgotten
+myself since it has been a busy year and lost of changes
+in rip have occurred slowly.
+
+
+rip 0.98
+========
+(1) CDDB lookup is now done directly using CDDB_get.pm instead
+of through cddb.pl, which ought to be cleaner code-wise and
+likely more robust. 
+
+(2) Moved many variables to the top of the script if they could
+be changed by the user in some meaningful way. This includes the
+variable for the default bitrate, encoder search order, CD read rate,
+backspace character, and CD device. The last is especially useful to
+set if you have an uncommon device that you use for audio CDs 
+(think DVD). Anyway, rip is a text file, so you are free to change
+those variables as you see fit, so I thought I'd put them in a
+more convenient place: the top of the file.
+
+(3) Many tweaks to the documentation and help screen to help clarify
+some things and fix notes that were no longer relevant due to 
+changes in the code over the last few major releases.
+
+(4) Updated the files INSTALLING and README. Also added a FAQ. 
+
+(5) Changed the included version of CDDB_get/CDDB to 1.66.
+
+
+rip 0.97
+========
+(1) When using "-n/--number" and "-T/--tag" flags together, the track number 
+will be added to the comments tag. Also, "Connecting to [CDDB...]" no 
+longer has freedb's info hardcoded into the script, as some connect
+to local CDDBs.
+
+(2) Major bug fix to the "-T/--tag" implementation so that tracks
+have the correct tag information added to them if not all tracks
+on the CD are ripped.
+
+(3) Now sorting the track list so that order of tracks given to
+rip does not matter (rip 4 1 3 == rip 1 3 4). 
+
+
+rip 0.96
+========
+(1) Buffering added to the rip process using "dd" per suggestion
+from Nicholas Kelleher. Should speed up rips that use oggenc.
+
+(2) Sanity check for /dev/cdrom so that cddb.pl does not fail
+with a non-verbose error message, sent in by Geoff Raye.
+
+
+rip 0.95
+========
+
+(1) A fix so that rip handles mkdir on names with spaces in them sent in
+by Rune Kristian Viken. 
+
+(2) Removed code that forces -r/--rename by default. 
+
+
+rip 0.94
+========
+
+(1) Added the flag "-T/--tag" which adds tagging info to the output audio
+file. For MP3s this is an ID3v1 tag generated by the MP3::Info perl module. 
+For Ogg Vorbis this is the tagging produced using oggenc. 
+
+(2) More documentation added to the code.
+
+
+rip 0.92
+========
+
+(1) Added "use strict" declaration and fixed all errors.
+
+(2) The symbol "=" is no longer needed for flags that take variables. For example,
+you can use either "-m=~/mp3" or "-m ~/mp3" to do a move.
+
+(3) Many structural changes to rip's framework should make the script more robust.
+
+(4) Move bug from rip 0.90 that names files without a "/" in between as in:
+$dir$filename instead of $dir/$filename, should be fixed. 
+
+
+rip 0.90
+========
+
+(1) Added a debugging file for debugging output lines, and a debug
+flag, -D/--debug.
+
+(2) Corrected how tracknames from CDDB with the same name are named so
+that 3 tracks named "Chorus" translates to three files named "Chorus.$ext"
+"Chorus_2.$ext" and "Chorus_3.$ext" where $ext is either "mp3", "ogg", or
+"wav", depending on flags.
+
+(3) Similar duplication checking has been added to code related to -r/--rename.
+
+(4) Added a flag -a/--all to support ripping of the entire CD without
+having to explicitly give a track arg of, say, "1-11" if the CD were
+to have eleven tracks.
+
+(5) Ogg Vorbis support will now require the *newest* "oggenc", or rather,
+one that supports a "-b/--bitrate" flag. Older "oggenc" binaries will no
+longer be supported.
+
+(6) Cleaned up manual -r/--rename so that it translates names like
+"Riders On The Storm" to "Riders_On_The_Storm.$ext" before storing in
+the rename list. $ext is one of "mp3", "ogg", or "wav".
+
+(7) Fixed use of backspace during script (does a "stty erase ^H" which
+hopefully will work on most systems).
+
+(8) The -q/--query flag has been removed.
+
+(9) Fixed parsing of CDDB entries that have ":" in the track name.
+
+(10) Reworked CDDB parsing so that if there is more than one CDDB entry,
+the user is asked which they prefer.
+
+(11) Added recovery code so that if CDDB fails, the script will ask the user
+if they wish to continue by using either a manual or a generic track renaming
+scheme.
+
+(12) Added signal handling so that rip will abort operation correctly on an
+error from a system call, on a CONTROL-C, or on similar "kill" signals.
+
+(13) Fixed creation of directories that do not have pre-existing parent
+directories by using "mkdir -p $outputDir" instead of just "mkdir $outputDir".
+
+(14) Fixed output directory names in the playlist so that there aren't any double
+slash "//" seperators in the absolute pathname.
+
+(15) The playlist now has an extension "*.playlist", thanks to Darin Ohashi, so
+that if the album title is the same as the artist's name the lazy rips don't end
+up trying to open a file with the same name as a directory.
+
+(16) Also thanks to Darin, a more robust parsing of CDDB entries that doesn't rely on
+splitting using ":" has been added to rip.
+
+
+rip 0.82
+========
+
+(1) Support for ripping CDs to Ogg Vorbis has been added in part
+thanks to Gabriel Finch.
+
+(2) Bugs related to -m=/--move= should (hopefully) finally be fixed.
+
+(3) Parsing related UNIX home var '~' has been fixed so that it is
+expanded to user's $HOME var (an absolute pathname) instead.
+
+(4) Another bug related to needing to remove some non-word chars such
+as \/ from the output filename has been sent in by Aryeh "Cody" Sherr.
+
+(5) Lastly, most flags should be working when using the Ogg Vorbis flag
+-O/--oggenc, except the obvious ones like -B/--bladeenc, -G/--gogo, and
+-L/--lame.
+
+
+rip 0.80
+========
+
+(1) A new flag (-P/--play) that allows the user to play ripped MP3s
+using XMMS during the rip, and
+
+(2) cleanups to the output of rip so that rip's child processes do not
+produce output unless the verbose flag is set. No output is generated by
+child processes or by rip if the quiet flag is set.
+
+(3) Normal output (neither flag set) produced by rip has been reformatted
+to be more pleasing to the eye and more useful.
+
+
+rip 0.78
+========
+
+(1) This release makes improvements to the documentation and help screen.
+
+(2) There is also better parsing of several special characters
+when renaming files via CDDB. For example, the name "Rhyme & Reason"
+would become "Rhyme_And_Reason.mp3" instead.
+
+(3) Lastly, some minor code clean up has been done.
+
+
+rip 0.76
+========
+
+(1) This release adds support for LAME and GOGO for MP3 encoding in
+addition to BladeEnc; which MP3 encoder to use is now flaggable
+(-L, -G, -B).
+
+(2) The playlist file is now put in $PWD when using the
+-l/--lazy flag.
+
+(3) A new flag was added, -S/--superlazy, that rips
+an entire CD, puts an XMMS compatible playlist in $PWD, places
+output MP3 files in $PWD/ArtistName/AlbumTitle/, and renames the
+MP3s using CDDB.
+
+(4) A "rip -c" (no track args) now prints the CDDB info to the terminal
+as one would suspect.
+
+(5) -t/--trayclose and -e/--eject have been added to allow closing
+and ejecting of the CD tray at the beginning/end of the script.
+
+
+rip 0.65
+========
+
+(1) New features related to using cddb.pl from CDDB/CDDB_get (a flag
+to allow online users to automatically rename the files they rip
+with the track names found via CDDB, and
+
+(2) a --lazy flag that rips the entire CD, encodes it to MP3, renames
+it via the CDDB, makes a dir named after the artist "$PWD/ArtistName/",
+moves all MP3 files into that dir, and finally adds a playlist to the
+dir which XMMS can use).
+
+
+rip 0.51
+========
+
+(1) Minor bugfixes and code cleanups were made to the code.
+
+
+rip 0.50
+========
+
+(1) Version 0.50 adds new functionality including a flag to specify
+which CDROM device to rip the audio track(s) from and
+
+(2) a flag to set the CDROM read speed to multiples of "x"
+(e.g. 8x, 32x, 50x)
+
+
+rip 0.40
+========
+
+(1) A fix was made for a "--move" bug which occured when attempting
+to move ripped mp3 files to a specified dir.
+
+(2) Code was added to allow the user to only rip to *.wav and not rip
+all the way to *.mp3.
+
+
+rip 0.32
+========
+
+(1) This development release includes the addition of a flag to
+permit the automatic moving of MP3 files to a specified directory
+after they are ripped.
+
+(2) The ARGV parsing has also been significantly modified to shorten the
+script up a bit, hence the "development" status.
+
+
+rip 0.28
+========
+
+(1) Initial version supports track rip args of the form "1-4 7 9-11 13 15"
+which it expands and rips tracks "1 2 3 4 7 9 10 11 13 15".
+
+(2) There are also flags for querying the CD in the drive and producing more
+verbose output.
+

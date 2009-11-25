@@ -1,0 +1,2303 @@
+#!/usr/bin/perl -w
+#
+#    rip -- A command-line based CD ripper (supports MP3, Ogg Vorbis, FLAC, and WAV)
+#
+#    rips audio CD tracks to either Motion Picture Experts Group Layer 3 (MP3)
+#    files, to Ogg Vorbis files, to FLAC files or to WAV files with no user intervention
+#    between steps of ripping and encoding. Implemented as a Perl script which
+#    groups the strengths of other powerful apps and provides a common interface
+#    across several different ripper and encoder implementations.
+#
+#    Copyright (C) 2003 Gregory J. Smethells
+#
+#
+#    License:
+#
+#    This program is free software; you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation; either version 2 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful, but
+#    WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+#    General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program; if not, write to the Free Software Foundation,
+#    Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+#
+#
+#    Disclaimer:
+#
+#    YOU SHOULD ONLY CREATE MP3/OGG FILES FROM AUDIO CDs THAT YOU OWN
+#    LEGALLY. ANY OTHER USE OF THIS SCRIPT IS NOT LEGAL, IS NOT CONDONED
+#    BY THIS AUTHOR, NOR IS SUCH ACTION IN THE SPIRIT OF THIS SCRIPT. THE
+#    AUTHOR HEREBY REMOVES HIMSELF FROM TAKING ANY RESPONSIBILITY FOR
+#    MISUSE OF THIS SCRIPT OR ANY PIECE OF SOFTWARE USED BY THIS SCRIPT
+#    IF THE AFOREMENTIONED CONDITIONS ARE NOT MET.
+#
+#
+#    Author's Notes:
+#
+#    This script requires a CD ripper such as cdparanoia and either an MP3
+#    application that can encode WAVs to MP3s, such as LAME, an Ogg Vorbis
+#    application that can encode WAVs to Ogg Vorbis files, such as oggenc,
+#    or a FLAC application that can encode WAVs to FLAC files.
+#
+#    The above tools need to be on your $PATH, since this script is essentially
+#    only a wrapper. All major functionality is found in those programs.
+#    However, I believe that the abstract functionality provided by this
+#    script is quite useful and makes these tools all the more powerful.
+#
+#    In the future, I hope to get more CD rippers and, mostly, more encoders
+#    to work with this script. The essential changes would be to add more
+#    @supportedEncoder entries and more checks to set the flags available for
+#    that tool in the subroutine setupInternalFlags(). Also new flags for 
+#    rip to setup any new tool would require changes to parseFlags() and
+#    to handleOptions().
+#
+#    Booleans in this script use "" for FALSE and "true" for TRUE.
+#    Logical constructs use "and", "or", and "not".
+#
+#    The standard file descriptor STDERR is closed and redirected to a
+#    a debugging file, therefore the use of "die()" is not suggested.
+#    Instead we will do a "print() and exit()" so that output is to
+#    STDOUT where the user can actually see it and read it.
+#
+#
+#    Dependencies:
+#
+#    The following programs/modules are needed or required to run rip.
+#
+#    REQUIRED:  perl           (www.perl.com)
+#    REQUIRED:  MP3::Info      (sourceforge.net/projects/mp3-info/)
+#    REQUIRED:  CDDB/CDDB_get  (armin.emx.at/cddb/)
+#    REQUIRED:  Getopt         (CPAN)
+#
+#    ONE OF:    cdparanoia     (www.xiph.org/paranoia/)
+#               cdda2wav       (http://www.escape.de/users/colossus/cdda2wav.html)
+#
+#    ONE OF:    lame           (www.mp3dev.org/mp3/)
+#               oggenc         (www.vorbis.com)
+#               gogo           (homepage1.nifty.com/herumi/)
+#               bladeenc       (bladeenc.mp3.no)
+#               flac           (flac.sourceforge.net)
+#
+#    The following programs/modules are optional requirments for running rip.
+#
+#    OPTIONAL:  eject          (eject.sourceforge.net)
+#
+
+
+##########################################################################
+#                                                                        #
+# INCLUDES                                                               #
+#                                                                        #
+##########################################################################
+
+# Some basic modules everyone should have installed
+use strict;
+use Cwd;
+use Getopt::Std;
+use Getopt::Long;
+use sigtrap 'handler', \&signalHandler, 'normal-signals';
+use POSIX qw(strftime);
+
+
+# Some less common modules people may or may not have installed
+use MP3::Info;
+use CDDB_get qw( get_cddb get_discids );
+
+
+
+##########################################################################
+#                                                                        #
+# DECLARATIONS                                                           #
+#                                                                        #
+##########################################################################
+
+
+# MOST OF THE FLAGS BELOW ARE SET LATER ON BY DIFFERENT SUBROUTINES IN THE
+# SCRIPT, SO SETTING THEM HERE WOULD LIKELY NOT CAUSE ANY CHANGES TO
+# THE SCRIPT'S BEHAVIOR (THERE ARE SOME SPECIAL CASES).
+
+
+my $date            = "2003-01-15";                # Date of last modification
+my $version         = "1.07";                      # Version number for this script
+
+
+my %config;                                       # Configuration passed to CDDB/CDDB_get
+my $dev             = "/dev/cdrom";               # CDROM device to read (used by -d/--dev)
+$config{CD_DEVICE}  = $dev;                       # Device that has the audio CD
+$config{CDDB_HOST}  = "freedb.freedb.org";        # CDDB host to find the server on
+$config{CDDB_PORT}  = 888;                        # CDDB port the CDDB server is using
+$config{CDDB_MODE}  = "http";                     # CDDB mode can be: cddb, http
+$config{input}      = 1;                          # User interaction: 1 = true, 0 = false
+$config{HELLO_ID}   = "greg my.net rip $version"; # HELLO string to give CDDB server
+
+$config{HTTP_PROXY} = $ENV{HTTP_PROXY} if $ENV{HTTP_PROXY}; # Use HTTP proxy if it exists in environ
+
+my $NOT_FOUND         = -1;                       # So I can tell what is found by my search
+
+my $encoder           = $NOT_FOUND;               # Index for encoder to use
+my $gogo              = 0;                        # Index for GOGO
+my $lame              = 1;                        # Index for LAME
+my $bladeenc          = 2;                        # Index for bladeenc
+my $oggenc            = 3;                        # Index for oggenc
+my $flac              = 4;                        # Index for flac
+my $notlame           = 5;                        # Index for notlame
+my @encoderPath       = ();                       # List of paths to installed encoders
+my @supportedEncoder  = ();                       # list of supported encoders
+
+my $encoderFlags      = "";                       # Encoder's accumulated flag line (set later)
+my $encoderBITRATE    = "";                       # Bitrate flag (set later)
+my $encoderQUIET      = "";                       # Quiet flag (set later)
+my $encoderQUALITY    = "";                       # Quality setting flag
+my $encoderQRATE      = "";                       # Default quality setting
+
+my $ripper            = $NOT_FOUND;               # Index for CD ripper to use
+my $cdparanoia        = 0;                        # Index for cdparanoia
+my $cdda2wav          = 1;                        # Index for cdda2wav
+my @supportedRipper   = ();                       # List of supported rippers
+my @ripperPath        = ();                       # List of paths to installed rippers
+
+my $ripperFlags       = "";                       # Ripper's accumulated flag line (set later)
+my $ripperTRACK       = "";                       # Track flag (set later)
+my $ripperDEVICE      = "";                       # Device flag (set later)
+my $ripperPARANOIA    = "";                       # Paranoia flag (set later)
+my $ripperQUIET       = "";                       # Quiet flag (set later)
+my $ripperSPEED       = "";                       # Speed flag (set later)
+my $ripperVERBOSE     = "";                       # Verbose flag (set later)
+my $ripperQUERY       = "";                       # Flags to use to query CD (set later)
+
+
+my $in                = "";                       # How to denote to take from stdin
+my $out               = "rip_temp_file.$$";       # What to name temp file (excluding extension)
+my $extension         = "mp3";                    # Filename extension: "mp3", "ogg", "flac", or "wav"
+
+
+my $DEFAULT_KBPS      = 160;                      # Default value for kilobits per second
+my $backspace         = "^?";                     # Some common choices include "^H" or "^?"
+
+my $STDERRFile        = "/tmp/rip-stderr";        # DEBUG file (stderr redirected here)
+my $DEFAULT_DIR       = getcwd;                   # Default directory to place output into
+my $pwd               = $DEFAULT_DIR;             # Where all output will be placed
+my $subDir            = "";                       # Default output subdirectory
+my @PATH              = split( ":", $ENV{PATH});  # Valid @PATH for current user
+my $HOME              = $ENV{HOME};               # Valid $HOME for current user
+my $RCFILE            = "$HOME/.riprc";           # Default run-command file for rip
+
+my $playlist          = "";                       # Name of the playlist file
+my $format            = "";                       # Empty string unless specific filename format requested
+my $secondpass        = "";                       # True if this is >= 2nd pass thru the script
+my $loop              = "true";                   # Whether to continue looping
+my $batchmode         = "";                       # True if we should loop on more CDs
+my $checkDatabase     = "";                       # True if CDDB should be used
+my $eject             = "";                       # True if we should eject cd tray
+my $debug             = "";                       # True if debugging should be on
+my $generate          = "";                       # True if we should generate a playlist
+my $help              = "";                       # True if help screen is to be printed
+my $speed;                                        # CD read rate         (used by -s/--speed)
+my $lazy              = "";                       # True if lazy should be done
+my $newPWD            = $pwd;                     # New PWD path  (used by -m/--move)
+my $nounderscore      = "";                       # True if we should not use an underscore in filenames
+my $paranoia;                                     # True if we are to be paranoid while ripping
+my $play              = "";                       # True if play output files should be played
+my $quiet             = "";                       # True if tools should be quiet
+my $renameTracks      = "";                       # True if manually renaming tracks
+my $superlazy         = "";                       # True if superlazy should be done
+my $trayclose         = "";                       # True if we should close CD tray
+my $tagIt             = "";                       # True if we should tag output files (MP3s only)
+my $verbose           = "";                       # True if tools hsould be verbose
+my $printVersion      = "";                       # True if we should print the version info
+my $wavONLY           = "";                       # True if we should rip to WAV only
+my $tagWithComments   = "";                       # True if we want to tag each track with comments
+my $variablebitrate   = "";                       # True if we want to use variable bit-rate encoding
+my $quality;                                      # Quality setting: must be undef!  (set later)
+my $qualityLAME       = 3;                        # Default quality setting for LAME lazy rips
+my $qualityOGGENC     = 9;                        # Default quality setting for oggenc lazy rips
+my $kbps              = $DEFAULT_KBPS;            # Kilobits per second  (used by -b/--bitrate)
+
+my @trackList         = ();                       # List of tracks to rip
+my @renameList        = ();                       # List of names to rename the tracks
+my @properNameList    = ();                       # List of proper names for the tracks
+
+my @lazyFlags         = ();                       # Default lazy flags read from rc file
+my @superlazyFlags    = ();                       # Default superlazy flags read from rc file
+
+my %preferences       = ();                       # User preferences read from $RCFILE
+my %args              = ();                       # Arguments given to rip used by Getopt::Std
+my %options           = ();                       # Arguments given to rip used by Getopt::Long
+
+my $artist            = "";                       # Artist's name
+my $title             = "";                       # Album's title
+my $genre             = "";                       # Album's category (Genre)
+my $year              = "";                       # Album's year of recording
+my $cddb_id           = "";                       # Album's CDDB ID
+my $numTracks         = "";                       # Number of tracks on CD
+
+
+
+##########################################################################
+#                                                                        #
+# SUBROUTINES                                                            #
+#                                                                        #
+##########################################################################
+
+
+##########################################################################
+#                                                                        #
+# Each subroutine is called in basically the same order that it's        #
+# defined here below. You will find the "main" at the bottom of this     #
+# script that calls each of these subroutines, as I said, basically in   #
+# this exact order, from top to bottom, with few exceptions. The only    #
+# real exception to note is subroutine signalHandler which is called     #
+# only when there is a signal to handle.                                 #
+#                                                                        #
+##########################################################################
+
+
+##########################################################################
+#                                                                        #
+# SUB: signalHandler                                                     #
+#                                                                        #
+#   Handles "normal" signals such as SIGINT, SIGQUIT, etc, by informing  #
+#   the user, removing the temporary file that is used during ripping,   #
+#   as well as closing files descriptors and exiting the script with a   #
+#   non-zero value.                                                      #
+#                                                                        #
+##########################################################################
+
+sub signalHandler {
+  # Finished with CD. It is safe to now eject the CD tray, if so flagged.
+  if( $eject ) {
+    print OLDOUT "Ejecting CD tray... " if not($quiet);
+    system( "eject $dev" );
+    print OLDOUT "Done.\n" if not($quiet);
+  }
+
+  # Close $STDERRFile output file and STDERR copy
+  close( STDERR );
+  close( OLDERR );
+
+  # Do not leave the temporary output file laying around
+  system( "rm -f \"$out\"" );
+
+  exit(1);
+}
+
+
+
+##########################################################################
+#                                                                        #
+# SUB: readRCFile                                                        #
+#                                                                        #
+#   Read the file named $RCFILE for default flags and default settings   #
+#   for variables like lazy/superlazy rip quality or bitrate values.     #
+#                                                                        #
+##########################################################################
+
+sub readRCFile {
+  my $variable;
+  my $value;
+
+
+  # Need to do this before the script begins, so we do it here
+
+  # Remember what STDERR and STDOUT were before we overwrote them
+  open(OLDOUT, ">&STDOUT") or print("cannot duplicate stdout: $!\n") and exit(1);
+  open(OLDERR, ">&STDERR") or print("cannot duplicate stderr: $!\n") and exit(1);
+  
+  # Make sure that the standard output always flushes data sent to it
+  OLDOUT->autoflush(1);
+  OLDERR->autoflush(1);
+
+  # Redirect stderr output to a temp file $STDERRFile
+  open(STDERR, ">$STDERRFile") or print OLDOUT ("cannot open $STDERRFile: $!\n") and exit(2);
+
+  # Does an rc file even exist? If not, create one from scratch
+  if( not(-e "$RCFILE") ) {
+    # Open the rc file for writing
+    open( rcFile, ">$RCFILE" ) or print OLDOUT ("rip: cannot open $RCFILE for writing: $!\n") and exit(2);
+
+    # Create a default rc file
+    print rcFile "# ALTER THIS FILE AT YOUR OWN RISK!\n\n";
+    print rcFile "# RC FILE VERSION 2\n\n";
+    print rcFile "# The \"default\" flags will automatically be given to rip when\n";
+    print rcFile "# you run it each time. They should look like args on a command-line.\n";
+    print rcFile "default = \"\"\n\n";
+    print rcFile "# This sets the default flags used for lazy rips.\n";
+    print rcFile "# Do NOT include -g or -m flags here!\n";
+    print rcFile "lazy = \"-e -c -t\"\n\n";
+    print rcFile "# This sets the default flags used for superlazy rips.\n";
+    print rcFile "# Do NOT include -g or -m flags here!\n";
+    print rcFile "superlazy = \"-e -c -t\"\n\n";
+    print rcFile "# Sets the default bitrate\n";
+    print rcFile "kbps = 160\n\n";
+    print rcFile "# Sets the defaults for quality (only used if rip sees a -q flag)\n";
+    print rcFile "qualityOGGENC = 9\n";
+    print rcFile "qualityLAME   = 3\n\n";
+    print rcFile "# Sets the default backspace char (try using \"\^\?\" or \"\^H\")\n";
+    print rcFile "backspace = \"\^\?\"\n\n";
+    print rcFile "# Only when debug is set to \"\" is the errorFile removed after each rip.\n";
+    print rcFile "debug = \"\"\n\n";
+    print rcFile "# The default device to find the CD in.\n";
+    print rcFile "dev = \"/dev/cdrom\"\n\n";
+
+    close( rcFile );
+  }
+
+
+  # Open the run-command file for reading
+  open( rcFile, "<$RCFILE" ) or print OLDOUT ("rip:  cannot open $RCFILE for reading: $!\n") and exit(1);
+
+  print STDERR "\n\n";
+
+  # Read each line of the file one by one  (partially from Perl Cookbook: p. 299)
+  while( <rcFile> ) {
+    chomp;
+
+    s/#.*//;             # Remove comments
+    s/^\s+//;            # Remove leading white-space
+    s/\s+$//;            # Remove trailing white-space
+    s/\"//g;             # Remove quotes
+
+    next unless length;  # Anything left?
+
+    ($variable, $value)       = split( /\s*=\s*/, $_, 2 );
+    $preferences{ $variable } = $value;
+
+    print STDERR "DEBUG: \$preferences{ $variable } == $value\n";
+  }
+
+  print STDERR "\n\n";
+
+  close( rcFile );
+
+  # Set script variables with the configuration values we read
+  @ARGV           = ( split( '\s', $preferences{ "default" } ), @ARGV ) if $preferences{ "default" };
+  @lazyFlags      = split( '\s', $preferences{ "lazy" } ) if $preferences{ "lazy" };
+  @superlazyFlags = split( '\s', $preferences{ "superlazy" } ) if $preferences{ "superlazy" };
+  $DEFAULT_KBPS   = $preferences{ "kbps" } if $preferences{ "kbps" };
+  $kbps           = $DEFAULT_KBPS;
+  $qualityOGGENC  = $preferences{ "qualityOGGENC" } if $preferences{ "qualityOGGENC" };
+  $qualityOGGENC  = $preferences{ "lzQualityOGGENC" } if $preferences{ "lzQualityOGGENC" };
+  $qualityLAME    = $preferences{ "qualityLAME" } if $preferences{ "qualityLAME" };
+  $qualityLAME    = $preferences{ "lzQualityLAME" } if $preferences{ "lzQualityLAME" };
+  $backspace      = $preferences{ "backspace" } if $preferences{ "backspace" };
+  $debug          = $preferences{ "debug" } if $preferences{ "debug" };
+  $dev            = $preferences{ "dev" } if $preferences{ "dev" };
+}
+
+
+
+##########################################################################
+#                                                                        #
+# SUB: setupSystem                                                       #
+#                                                                        #
+#   Makes sure the system is prepared for the rest of the script.        #
+#   This includes checking for a cdrom capable device and setting the    #
+#   backspace character with "stty" (since perl handles this badly       #
+#   on its own).                                                         #
+#                                                                        #
+##########################################################################
+
+sub setupSystem {
+  # Maybe the user only has a DVD device but no CDROM only device
+  if( (-e ("/dev/dvd")) and !(-e ("/dev/cdrom")) ) {
+    $dev               = "/dev/dvd";
+    $config{CD_DEVICE} = $dev;        # Device that has the audio CD
+
+    print OLDOUT ( "rip:  The file /dev/cdrom does not exist, but /dev/dvd does.\n" );
+    print OLDOUT ( "rip:  Proceeding assuming audio CD is in your DVD drive.\n\n" );
+    print OLDOUT ( "rip:  If /dev/dvd is the device you are ripping from you could\n" );
+    print OLDOUT ( "rip:  specify this explicitly with \"rip -d /dev/dvd\"\n" );
+  }
+  # Sanity check on $dev to make sure the device file "really does exist"
+  elsif( !(-e $dev) ) {
+    print OLDOUT ( "\nrip:  The file $dev does not exist.\n" );
+    print OLDOUT ( "rip:  $dev should be pointing to your CD-ROM\n" );
+    print OLDOUT ( "rip:  device, which might be /dev/hdc or the like.\n" );
+    print OLDOUT ( "rip:  If /dev/hdc were your CDROM device you could\n" );
+    print OLDOUT ( "rip:  specify this explicitly with \"rip -d /dev/hdc\"\n" );
+  }
+  else {
+    # Do nothing
+  }
+
+  # Make sure backspace is set to something that might work
+  system( "stty erase \"$backspace\"" );
+}
+
+
+
+##########################################################################
+#                                                                        #
+# SUB: findTools                                                         #
+#                                                                        #
+#   If another ripper or encoder is added to rip, an additional change   #
+#   is needed in the subroutine setupInternalFlags() to set ripperXXX or #
+#   encoderXXX flags properly for that ripper or encoder.                #
+#                                                                        #
+#   Finds any installed tools on the current system that are listed in   #
+#   @supportRipper and @supportedEncoder. It then records the path to    #
+#   that tool as a string in lists named @ripperPath and @encoderPath    #
+#                                                                        #
+#                                                                        #
+#   Yes you might be able to do this with `find`, but I wanted to search #
+#   only on the user's PATH and not the entire system on every rip. The  #
+#   latter could get long and loud with lots of hard disk action we do   #
+#   not really need.                                                     #
+#                                                                        #
+#   And, no, `which` does not work here because it prints to stderr      #
+#   thus requiring a file descriptor redirect I'd rather not handle.     #
+#   This is more elegent. Trust me.                                      #
+#                                                                        #
+##########################################################################
+
+sub findTools {
+  my $path;
+
+
+  # Rippers
+  $supportedRipper[$cdparanoia]  = "cdparanoia";
+  $supportedRipper[$cdda2wav]    = "cdda2wav";
+  $ripperPath[$cdparanoia]       = "";
+  $ripperPath[$cdda2wav]         = "";
+
+  # Encoders
+  $supportedEncoder[$gogo]       = "gogo";
+  $supportedEncoder[$lame]       = "lame";
+  $supportedEncoder[$bladeenc]   = "bladeenc";
+  $supportedEncoder[$oggenc]     = "oggenc";
+  $supportedEncoder[$flac]       = "flac";
+  $supportedEncoder[$notlame]    = "notlame";
+  $encoderPath[$gogo]            = "";
+  $encoderPath[$lame]            = "";
+  $encoderPath[$bladeenc]        = "";
+  $encoderPath[$oggenc]          = "";
+  $encoderPath[$flac]            = "";
+  $encoderPath[$notlame]         = "";
+
+  # Assume there is nothing available initially.
+  $ripper  = $NOT_FOUND;
+  $encoder = $NOT_FOUND;
+
+
+  # Find valid CD ripper tools
+
+  # Check for each ripper that is supported
+  for( my $i = 0 ; $i < @supportedRipper ; $i++ ) {
+    # Check everywhere on the user's path
+    foreach $path (@PATH) {
+      if( -e ("$path/$supportedRipper[$i]") ) {
+        $ripperPath[$i] = "$path/$supportedRipper[$i]";
+
+        # We found one! Remember were it is located
+        if( $ripper == $NOT_FOUND ) {
+          $ripper = $i;
+          print STDERR "DEBUG: \$ripperPath[\$ripper]   = $ripperPath[$ripper]\n" if $debug;
+        }
+      }
+    }
+  }
+
+
+  # Find valid encoder tools
+
+  # Check for each encoder that is supported
+  for( my $i = 0 ; $i < @supportedEncoder ; $i++ ) {
+    # Check everywhere on the user's path
+    foreach $path (@PATH) {
+      if( -e ("$path/$supportedEncoder[$i]") ) {
+        $encoderPath[$i] = "$path/$supportedEncoder[$i]";
+
+       # We found one! Remember were it is located
+        if( $encoder == $NOT_FOUND ) {
+          $encoder = $i;
+          print STDERR "DEBUG: \$encoderPath[\$encoder] = $encoderPath[$encoder]\n" if $debug;
+        }
+      }
+    }
+  }
+}
+
+
+
+##########################################################################
+#                                                                        #
+# SUB: parseFlags                                                        #
+#                                                                        #
+#   Parses arguments (flags) given to rip. Once it is determined what    #
+#   flags have been given, either GLOBAL variables that the subroutine   #
+#   "encode" looks at are set or functions such as a CD tray close       #
+#   are run.                                                             #
+#                                                                        #
+##########################################################################
+
+sub parseFlags {
+  my $tempFlag;
+  my $item;
+  my $check;
+  my @ripperChoice   = ();
+  my @encoderChoice  = ();
+  my @encoderFlagLetter = ();
+  my @ripperFlagLetter  = ();
+  my $letters        = "";
+  my @shortFlagsTemp = ();
+  my $lengthARGV     = @ARGV;
+
+
+  print STDERR "\n";
+
+  # Pull out short flags from @ARGV so GetOptions (long flags) does not choke on them
+  for( my $i = 0 ; $i < $lengthARGV ; $i++ ) {
+    $_ = shift( @ARGV );
+    print STDERR "DEBUG: grabbed $_\n";
+
+    s/~/$HOME/g;      # substitute $HOME environment variable for '~' char
+    s/\.\//$pwd\//g;  # substitute $pwd  environment variable for '.' char
+
+    $tempFlag = $_;
+
+    # We will restore these to @ARGV after GetOptions has been called
+    if(  !($tempFlag =~ /^\-\-/) and ($tempFlag =~ /^\-/)   ) {
+      @shortFlagsTemp = (@shortFlagsTemp, $tempFlag);
+      print STDERR "DEBUG: moved $tempFlag to shortFlagsTemp\n";
+
+      # Take any arguments along with it
+      if( (@ARGV and !($ARGV[0] =~ /^\-\-/) and !($ARGV[0] =~ /^\-/)) and
+          (($tempFlag eq "-b" and $ARGV[0] =~ /^\d{1,}$/) or
+           ($tempFlag eq "-d" and $ARGV[0] =~ /^\/\w/)    or
+           ($tempFlag eq "-f"                        )    or
+           ($tempFlag eq "-g" and $ARGV[0] =~ /^\/\w/)    or
+           ($tempFlag eq "-m" and $ARGV[0] =~ /^\/\w/)    or
+           ($tempFlag eq "-q" and $ARGV[0] =~ /^\d{1,}$/) or
+           ($tempFlag eq "-s" and $ARGV[0] =~ /^\d{1,}$/))     ) {
+        $tempFlag = shift( @ARGV );
+        @shortFlagsTemp = (@shortFlagsTemp, $tempFlag);
+        print STDERR "DEBUG: moved $tempFlag to shortFlagsTemp too\n";
+        $i++;
+      }
+    }
+    else {
+      @ARGV = (@ARGV, $tempFlag);
+    }
+  }
+
+  print STDERR "DEBUG: \@ARGV before GetOptions: @ARGV\n";
+
+  # Call the long options parser FIRST (so getopts doesn't choke on long opts)
+  GetOptions( "bitrate=i"  => \$options{b},
+              "bladeenc"   => \$encoderChoice[$bladeenc],
+              "cddb"       => \$options{c},
+              "cdda2wav"   => \$ripperChoice[$cdda2wav],
+              "cdparanoia" => \$ripperChoice[$cdparanoia],
+              "comment"    => \$options{C},
+              "device=s"   => \$options{d},
+              "debug"      => \$options{D},
+              "eject"      => \$options{e},
+              "format=s"   => \$options{f},
+              "flac"       => \$encoderChoice[$flac],
+              "generate=s" => \$options{g},
+              "gogo"       => \$encoderChoice[$gogo],
+              "help"       => \$options{h},
+              "lazy"       => \$options{l},
+              "lame"       => \$encoderChoice[$lame],
+              "move=s"     => \$options{m},
+              "many"       => \$options{M},
+              "nounderscore" => \$options{n},
+              "notlame"    => \$encoderChoice[$notlame],
+              "oggenc"     => \$encoderChoice[$oggenc],
+              "paranoia"   => \$options{p},
+              "play"       => \$options{P},
+              "quality=i"  => \$options{q},
+              "quiet"      => \$options{Q},
+              "rename"     => \$options{r},
+              "speed=i"    => \$options{s},
+              "superlazy"  => \$options{S},
+              "trayclose"  => \$options{t},
+              "tag"        => \$options{T},
+              "verbose"    => \$options{v},
+              "version"    => \$options{V},
+              "wav"        => \$options{w}    );
+
+  print STDERR "DEBUG: \@ARGV after GetOptions: @ARGV\n";
+
+  # Let's make this less terse and more verbose
+  # Do NOT overwrite the global variable if flag is NOT set!!!
+  $kbps                = $options{b} if ($options{b} and $kbps == $DEFAULT_KBPS);
+  $checkDatabase       = $options{c} if $options{c};
+  $tagWithComments     = $options{C} if $options{C};
+  $dev                 = $options{d} if $options{d};
+  $debug               = $options{D} if $options{D};
+  $eject               = $options{e} if $options{e};
+  $format              = $options{f} if $options{f};
+  $playlist            = $options{g} if $options{g};
+  $help                = $options{h} if $options{h};
+  $lazy                = $options{l} if $options{l};
+  $newPWD              = $options{m} if $options{m};
+  $nounderscore        = $options{n} if $options{n};
+  $batchmode           = $options{M} if $options{M};
+  $paranoia            = $options{p} if $options{p};
+  $play                = $options{P} if $options{P};
+  $variablebitrate     = $options{q} if $options{q};
+  $quality             = $options{q} if $options{q};
+  $quiet               = $options{Q} if $options{Q};
+  $renameTracks        = $options{r} if $options{r};
+  $speed               = $options{s} if $options{s};
+  $superlazy           = $options{S} if $options{S};
+  $trayclose           = $options{t} if $options{t};
+  $tagIt               = $options{T} if $options{T};
+  $verbose             = $options{v} if $options{v};
+  $printVersion        = $options{V} if $options{V};
+  $wavONLY             = $options{w} if $options{w};
+
+
+  # Restore short flags to @ARGV (flags first and track args last!)
+  @ARGV = (@shortFlagsTemp, @ARGV);
+
+  # Remember which flags related to which encoders
+  $encoderFlagLetter[$gogo]     = "G";
+  $encoderFlagLetter[$lame]     = "L";
+  $encoderFlagLetter[$bladeenc] = "B";
+  $encoderFlagLetter[$oggenc]   = "O";
+  $encoderFlagLetter[$flac]     = "F";
+  $encoderFlagLetter[$notlame]  = "N";
+
+  # Remember which flags related to which rippers
+  $ripperFlagLetter[$cdparanoia] = "Y";
+  $ripperFlagLetter[$cdda2wav]   = "Z";
+
+  # Collect all of those letters together
+  for( my $i = 0 ; $i < @supportedEncoder ; $i++ ) {
+    $letters = $letters . $encoderFlagLetter[$i];
+  }
+
+  for( my $i = 0 ; $i < @supportedRipper ; $i++ ) {
+    $letters = $letters . $ripperFlagLetter[$i];
+  }
+
+  # The flags for "aAn" are current left here for BACKWARDS COMPATIBILITY
+  $letters = "b:cCd:Def:g:hlm:MnpPq:Qrs:StTvVw" . $letters;
+
+  print STDERR "DEBUG: \@ARGV before getopts: @ARGV\n";
+
+  # Call the short options parser SECOND (so all long flags are already gone)
+  getopts("$letters", \%args);
+
+  print STDERR "DEBUG: \@ARGV after getopts: @ARGV\n";
+
+  # Let's make this less terse and more verbose
+  # Do NOT overwrite the global variable if flag is NOT set!!!
+  $kbps                = $args{b} if( $args{b} and $kbps == $DEFAULT_KBPS);
+  $checkDatabase       = $args{c} if $args{c};
+  $tagWithComments     = $args{C} if $args{C};
+  $dev                 = $args{d} if $args{d};
+  $debug               = $args{D} if $args{D};
+  $eject               = $args{e} if $args{e};
+  $format              = $args{f} if $args{f};
+  $playlist            = $args{g} if $args{g};
+  $help                = $args{h} if $args{h};
+  $lazy                = $args{l} if $args{l};
+  $batchmode           = $args{M} if $args{M};
+  $newPWD              = $args{m} if $args{m};
+  $nounderscore        = $args{n} if $args{n};
+  $paranoia            = $args{p} if $args{p};
+  $play                = $args{P} if $args{P};
+  $variablebitrate     = $args{q} if $args{q};
+  $quality             = $args{q} if $args{q};
+  $quiet               = $args{Q} if $args{Q};
+  $renameTracks        = $args{r} if $args{r};
+  $speed               = $args{s} if $args{s};
+  $superlazy           = $args{S} if $args{S};
+  $trayclose           = $args{t} if $args{t};
+  $tagIt               = $args{T} if $args{T};
+  $verbose             = $args{v} if $args{v};
+  $printVersion        = $args{V} if $args{V};
+  $wavONLY             = $args{w} if $args{w};
+
+  # See if a specific ripper flag was set and conditionally set $ripper properly
+  for( my $i = 0 ; $i < @supportedRipper ; $i++ ) {
+    if( $args{$ripperFlagLetter[$i]} or $ripperChoice[$i] ) {
+      if( $ripperPath[$i] ) {
+        $ripper = $i;
+        print STDERR "DEBUG: set ripper to $ripperPath[$i]\n" if $debug;
+      }
+      else {
+        print( "rip:  You flagged \"$supportedRipper[$i]\" but it is not on your \$PATH\n" );
+        &abort;
+      }
+    }
+  }
+
+  # See if a specific encoder flag was set and conditionally set $encoder properly
+  for( my $i = 0 ; $i < @supportedEncoder ; $i++ ) {
+    if( $args{$encoderFlagLetter[$i]} or $encoderChoice[$i] ) {
+      if( $encoderPath[$i] ) {
+        $encoder = $i;
+        print STDERR "DEBUG: set encoder to $encoderPath[$i]\n" if $debug;
+      }
+      else {
+        print( "rip:  You flagged \"$supportedEncoder[$i]\" but it is not on your \$PATH\n" );
+        &abort;
+      }
+    }
+  }
+
+  print STDERR "\n\nDEBUG: OPTIONS NOW SET INCLUDE:\n\n";
+  print STDERR "DEBUG: \$kbps                = $kbps\n" if $kbps;
+  print STDERR "DEBUG: \$checkDatabase       = $checkDatabase\n" if $checkDatabase;
+  print STDERR "DEBUG: \$tagWithComments     = $tagWithComments\n" if $tagWithComments;
+  print STDERR "DEBUG: \$dev                 = $dev\n" if $dev;
+  print STDERR "DEBUG: \$debug               = $debug\n" if $debug;
+  print STDERR "DEBUG: \$eject               = $eject\n" if $eject;
+  print STDERR "DEBUG: \$format              = $format\n" if $format;
+  print STDERR "DEBUG: \$playlist            = $playlist\n" if $playlist;
+  print STDERR "DEBUG: \$help                = $help\n" if $help;
+  print STDERR "DEBUG: \$lazy                = $lazy\n" if $lazy;
+  print STDERR "DEBUG: \$batchmode           = $batchmode\n" if $batchmode;
+  print STDERR "DEBUG: \$newPWD              = $newPWD\n" if $newPWD;
+  print STDERR "DEBUG: \$paranoia            = $paranoia\n" if $paranoia;
+  print STDERR "DEBUG: \$play                = $play\n" if $play;
+  print STDERR "DEBUG: \$variablebitrate     = $variablebitrate\n" if $variablebitrate;
+  print STDERR "DEBUG: \$quality             = $quality\n" if $quality;
+  print STDERR "DEBUG: \$quiet               = $quiet\n" if $quiet;
+  print STDERR "DEBUG: \$renameTracks        = $renameTracks\n" if $renameTracks;
+  print STDERR "DEBUG: \$speed               = $speed\n" if $speed;
+  print STDERR "DEBUG: \$superlazy           = $superlazy\n" if $superlazy;
+  print STDERR "DEBUG: \$trayclose           = $trayclose\n" if $trayclose;
+  print STDERR "DEBUG: \$tagIt               = $tagIt\n" if $tagIt;
+  print STDERR "DEBUG: \$verbose             = $verbose\n" if $verbose;
+  print STDERR "DEBUG: \$printVersion        = $printVersion\n" if $printVersion;
+  print STDERR "DEBUG: \$wavONLY             = $wavONLY\n" if $wavONLY;
+  print STDERR "\n\n";
+
+
+  # Check $format and make sure that it makes sense
+  if(  $format and !($format =~ /((\%[ASTN]).*){1,}/)   ) {
+    print STDERR "DEBUG: \$format  $format  does not make sense\n" if $debug;
+    print OLDOUT "rip:  unknown format specified: $format\n" and exit(2);
+  }
+}
+
+
+
+##########################################################################
+#                                                                        #
+# SUB: setupInternalFlags                                                #
+#                                                                        #
+#   Sets ripper and encoder specific flag values based on what $ripper   #
+#   and $encoder indices are set to. These are later used by subroutine  #
+#   handleOptions() to flag ripper/encoders properly.                    #
+#                                                                        #
+##########################################################################
+
+sub setupInternalFlags {
+  # Setup ripper specific flags
+  if( $ripper == $cdparanoia ) {
+    # Used by encode() mostly 
+    $ripperTRACK      = " ";
+    $ripperVERBOSE    = " -v ";
+    $ripperQUIET      = " -q ";
+    $ripperSPEED      = " -S ";
+    $ripperDEVICE     = " -d ";
+    $ripperPARANOIA   = " -z3 ";       # Third times the charm
+    $ripperQUERY      = " -sQ ";
+
+    $ripperFlags      = " ";            # Default cdparanoia flags
+  }
+  elsif( $ripper == $cdda2wav ) {
+    # Used by encode() mostly 
+    $ripperTRACK      = " -t ";
+    $ripperVERBOSE    = " -V ";
+    $ripperQUIET      = " -q ";
+    $ripperSPEED      = " -S ";
+    $ripperDEVICE     = " -D ";
+    $ripperPARANOIA   = " ";
+    $ripperQUERY      = " -JH ";
+
+    $ripperFlags      = " -H ";         # Default cdda2wav flags
+  }
+  else {
+     print STDERR "DEBUG: Unknown ripper index: $ripper ($cdparanoia, $cdda2wav)\n" if $debug;
+     print OLDOUT ( "rip:  Did not find a ripper on your system!\n" );
+     exit( 1 );
+  }
+
+
+  # Setup encoder specific flags
+  if( $encoder == $bladeenc ) {
+    $extension        = "mp3";
+
+    # Used by handleOptions() when appropriate
+    $encoderQUIET     = " -quiet ";
+    $encoderBITRATE   = " -br ";
+
+    $encoderFlags     = " ";            # Default bladeenc flags
+
+    # How to denote standard input
+    $in               = " STDIN ";
+  }
+  elsif( $encoder == $gogo ) {
+    $extension        = "mp3";
+
+    # Used by handleOptions() when appropriate
+    $encoderQUIET     = " -silent ";
+    $encoderBITRATE   = " -b ";
+
+    $encoderFlags     = " ";            # Default GOGO flags
+
+    # How to denote standard input
+    $in               = " stdin ";
+  }
+  elsif( $encoder == $lame ) {
+    $extension        = "mp3";
+
+    # Used by handleOptions() when appropriate
+    $encoderQUIET     = " --silent ";
+    $encoderBITRATE   = " -b ";
+    $encoderQUALITY   = " -V ";
+
+    $encoderQRATE     = " $qualityLAME ";
+
+    $encoderFlags     = " ";            # Default LAME flags
+
+    # How to denote standard input
+    $in               = " - ";
+  }
+  elsif( $encoder == $oggenc ) {
+    $extension        = "ogg";
+
+    # Used by handleOptions() when appropriate
+    $encoderQUIET     = " --quiet ";
+    $encoderBITRATE   = " --bitrate ";
+    $encoderQUALITY   = " -q ";
+
+    $encoderQRATE     = " $qualityOGGENC ";
+
+    # How to denote standard input
+    $encoderFlags     = " - ";          # Default oggenc flags
+
+    # Bit of a kludge because we need the "-" before the "-o"
+    $in               = " -o ";
+  }
+  elsif( $encoder == $flac ) {
+    $extension        = "flac";
+
+    # Used by handleOptions() when appropriate
+    $encoderQUIET     = " -s ";
+
+    $encoderFlags     = " ";          # Default flac flags
+
+    # How to denote standard input (output flag on the end)
+    $in               = " - -o ";
+  }
+  elsif( $encoder == $notlame ) {
+    $extension        = "mp3";
+
+    # Used by handleOptions() when appropriate
+    $encoderQUIET     = " --quiet ";
+    $encoderBITRATE   = " -b ";
+    $encoderQUALITY   = " -v -q ";
+
+    $encoderQRATE     = " $qualityLAME ";
+ 
+    $encoderFlags     = " ";
+  
+    # How to denote standard input
+    $in               = " - ";
+  }
+  else {
+    print STDERR "DEBUG: UNKNOWN ENCODER! WHERE IS OGGENC?\n" if $debug;
+    print OLDOUT ( "rip:  No encoder found on your system!\n" );
+    exit( 1 );
+  }
+}
+
+
+
+##########################################################################
+#                                                                        #
+# SUB: handleOptions                                                     #
+#                                                                        #
+#   Once parseFlags sets up the global variables, handleOptions may      #
+#   run through the vars, taking appropriate action. These actions can   #
+#   include, and are not limited to: setting ripperFlags or setting      #
+#   encoderFlags, calling usage/exiting, and printing out version info.  #
+#                                                                        #
+##########################################################################
+
+sub handleOptions {
+  my $flag;
+  my $answer;
+  my $okaySpeed;
+  my $bitrateSet;
+  my $qualitySet;
+
+
+  # HOW LAZY ARE WE? DO WE NEED TO PARSE MORE FLAGS???
+
+  # Are we going to be lazy?
+  if( $lazy ) {
+    @ARGV = (@lazyFlags, @ARGV);
+    &parseFlags;
+
+    print STDERR "DEBUG: set to do lazy rip\n" if $debug;
+  }
+
+
+  # Are we going to be superlazy?
+  if( $superlazy ) {
+    @ARGV = (@superlazyFlags, @ARGV);
+    &parseFlags;
+
+    print STDERR "DEBUG: set to be super lazy\n" if $debug;
+  }
+
+
+  # Need to turn tagging on, too
+  if( $tagWithComments ) {
+    $tagIt = "true";
+    print STDERR "DEBUG: set to tag with info\n" if $debug;
+    print STDERR "DEBUG: set to tag each track with comments\n" if $debug;
+  }
+
+
+  # GENERIC SPECIAL CASES
+
+  # Print version info and exit
+  if( $printVersion ) {
+    print OLDOUT ( "\n########################################################\n"  );
+    print OLDOUT ( "#                  /\\/\\/  rip  \\/\\/\\                   #\n" );
+    print OLDOUT ( "#       Created by Gregory J. Smethells (c) 2003       #\n"  );
+    print OLDOUT ( "########################################################\n"  );
+    print OLDOUT ( "#     Version $version was last modified on $date     #\n"  );
+    print OLDOUT ( "# Please report bugs and/or email your suggestions to  #\n"  );
+    print OLDOUT ( "#                 smethegj\@cs.wisc.edu                 #\n" );
+    print OLDOUT ( "#              http://rip.sourceforge.net              #\n"  );
+    print OLDOUT ( "########################################################\n\n"  );
+
+    &terminate;   # EXIT!
+  }
+
+
+  # Print the help screen and exit
+  if( $help ) {
+    &usage;    # EXIT!
+  }
+
+
+  # Alert user to where debug information can be found
+  print OLDOUT "\nDEBUG information being written to the file: $STDERRFile\n\n" if $debug;
+
+
+  # What device are we ripping from?
+  if( $dev ) {
+    if( $dev =~ /^\/dev\/\w+/ and ( -e $dev ) ) {
+      $ripperFlags       = $ripperFlags . $ripperDEVICE . $dev;
+      $config{CD_DEVICE} = $dev;  # Alert CDDB lookup subroutine to this
+      print STDERR "DEBUG: set device to $dev\n" if $debug;
+    }
+    else {
+      print OLDOUT ( "rip:  Invalid device specified: \"${dev}\".\n" ) and &terminate;
+    }
+  }
+  else {
+    # Sanity check: this HAS to be set to something
+    $dev = "/dev/cdrom";
+    print OLDOUT ( "rip: device not set: assuming  --dev /dev/cdrom\n" );
+  }
+
+
+  # Close that CD tray
+  if( $trayclose ) {
+    print OLDOUT "Loading CD tray... " if not($quiet);
+    system( "eject --trayclose $dev" );
+    print OLDOUT ( "Done.\n" ) if not($quiet);
+  }
+
+
+  # DO WE WANT variable OR fixed BIT-RATE?
+
+  # Set the bitrate on the encoder
+  if( $kbps and !$variablebitrate and ($encoder != $flac) ) {
+    $encoderFlags = $encoderFlags . $encoderBITRATE . $kbps;
+    print STDERR "DEBUG: set bitrate to $kbps\n" if $debug;
+  }
+
+  # Set the quality if the encoder allows it
+  if( $variablebitrate and $quality and ($encoder == $oggenc or $encoder == $lame) ) {
+    $encoderFlags = $encoderFlags . $encoderQUALITY . $quality;
+    print STDERR "DEBUG: set quality to $quality\n" if $debug;
+  }
+  elsif( $variablebitrate and !($encoder == $oggenc or $encoder == $lame) ) {
+    print OLDOUT "$encoder does not support VBR as of this rip release $version\n" and &terminate;
+  }
+
+  # Turn on paranoia flags
+  if( $paranoia and !$variablebitrate and ($encoder != $flac) ) {
+    $ripperFlags  = $ripperFlags  . $ripperPARANOIA;
+    print STDERR "DEBUG: set paranoia\n" if $debug;
+  }
+
+
+  # GENERAL SYSTEM SETUP
+
+  # What are we encoding to?
+  if( $wavONLY ) {
+    $extension = "wav";
+    print STDERR "DEBUG: set to encode to WAV only\n" if $debug;
+  }
+  elsif( $encoder == $oggenc ) {
+    $extension = "ogg";
+    print STDERR "DEBUG: set to encode to Ogg Vorbis\n" if $debug;
+  }
+  elsif( $encoder == $flac ) {
+    $extension = "flac";
+    print STDERR "DEBUG: set to encode to FLAC\n" if $debug;
+  }
+  else {
+    $extension = "mp3";
+    print STDERR "DEBUG: set to encode to MP3\n" if $debug;
+  }
+
+
+  # May need to create that dir if it doesn't already exist
+  if( $newPWD ) {
+    # Using \W to remove these chars would also remove '/' and/or '_' which would be *bad*
+    $newPWD =~ s/[\`\~\!\@\#\$\%\^\&\*\(\)\<\>\?\\\+\=\[\]\{\}\'\"\;\:\?\.\,]//g;
+
+    if(  not( -e $newPWD )  ) {
+      system( "mkdir -p \"$newPWD\"" );
+      print STDERR "DEBUG: tried to create dir $newPWD\n" if $debug;
+    }
+
+    if(  not( -e $newPWD ) or not( -w $newPWD )  ) {
+      print OLDOUT ( "Either the output directory $newPWD cannot be created\n" );
+      print OLDOUT ( "or it is not writable. Output will be to $pwd instead.\n" );
+    }
+    else {
+      chdir( "$newPWD" );
+      $pwd         = getcwd;
+      print STDERR "DEBUG: set \$pwd to $pwd\n" if $debug;
+    }
+  }
+
+
+  # Flag the rippers and encoders to be quiet
+  if( $quiet && !$verbose) {
+    $ripperFlags  = $ripperFlags  . $ripperQUIET;
+    $encoderFlags = $encoderFlags . $encoderQUIET;
+    print STDERR "DEBUG: set to be quiet\n" if $debug;
+  }
+
+
+  # Flag the rippers and encoders to be verbose
+  if( $verbose && !$quiet) {
+    $ripperFlags = $ripperFlags . $ripperVERBOSE;
+    print STDERR "DEBUG: set to be verbose\n" if $debug;
+  }
+
+
+  # Set the cd read speed
+  if( $speed ) {
+    $okaySpeed = "true";
+
+    if( $speed < 0 or $speed > 80 ) {
+      $okaySpeed = "";
+
+      print OLDOUT ( "\nCD read speed should be ${speed}?\n" );
+      print OLDOUT ( "Are you sure (y/N)? " );
+      chomp( $answer = <STDIN> );
+
+      if( $answer =~ /^[Yy]/ ) {
+        $okaySpeed = "true";
+      }
+    }
+
+    if( $okaySpeed ) {
+      $ripperFlags = $ripperFlags . $ripperSPEED . $speed;
+      print STDERR "DEBUG: set CD speed to $speed\n" if $debug;
+    }
+  }
+
+
+  # DEBUGGING RELATED INFO
+
+  # Print debug information about what is flagged and what programs will be used
+  if( $debug ) {
+    print STDERR "\nDEBUG: Ripper:        $ripperPath[$ripper]\n";
+    print STDERR   "DEBUG: Ripper flags:  $ripperFlags\n";
+    print STDERR   "DEBUG: Encoder:       $encoderPath[$encoder]\n";
+    print STDERR   "DEBUG: Encoder flags: $encoderFlags\n";
+    print STDERR   "DEBUG: Output dir:    $pwd/$subDir\n\n";
+  }
+}
+
+
+
+##########################################################################
+#                                                                        #
+# SUB: parseTracks                                                       #
+#                                                                        #
+#   Parses the track list argument to rip. Then set @trackList to show   #
+#   what tracks to handle. If there are no tracks to parse, assume that  #
+#   we are to rip the entire CD.                                         #
+#                                                                        #
+##########################################################################
+
+sub parseTracks {
+  my $start;
+  my $end;
+  my $queryCommand;
+
+
+  $queryCommand = "$ripperPath[$ripper] $ripperQUERY $ripperDEVICE $dev";
+
+  print OLDOUT "Querying CD for track information...";
+  print STDERR "DEBUG: Doing $queryCommand\n" if $debug;
+
+  # Figure out how many tracks there are on the CD ($numTracks)
+  if( $ripper == $cdparanoia || $ripper == $cdda2wav ) {
+    $SIG{'INT'} = 'IGNORE';
+    system( $queryCommand );
+    $SIG{'INT'} = \&signalHandler;
+    print STDERR "DEBUG: queried CD for track info\n" if $debug;
+  }
+  else {
+    print OLDOUT ( "\nrip: No cdparanoia or cdd2wav found on your system!\n" );
+    &abort
+  }
+
+  $numTracks = 0;
+
+  open(TEMP, "<$STDERRFile") or print OLDOUT ( "rip: cannot open temp file: $!\n" ) and exit(3);
+
+  $_ = " ";
+
+  if( $ripper == $cdparanoia ) {
+    # This code is HIGHLY DEPENDENT on the output format from cdparanoia!
+    # If you have a better suggestion for how to do this, I am all ears.
+   
+    # Find the start of the track listing output
+    while( not(eof TEMP) and not($_ =~ /=====/) ) {
+      $_ = <TEMP>;
+    }
+
+    # Start counting the lines in the file (output from cdparanoia)
+    while( not(eof TEMP) and not($_ =~ /TOTAL/) ) {
+      $_ = <TEMP>;
+  
+      if( not($_ =~ /TOTAL/ ) ) {
+        $numTracks++;
+      }
+    }
+  }
+  elsif( $ripper == $cdda2wav ) {
+    # Find the line that mentions the total tracks
+    while( not(eof TEMP) and not($_ =~ /total tracks:/) ) {
+      $_ = <TEMP>;
+    }
+ 
+    # Grab the track num outta there with a back-reference 
+    s/.*total tracks:(.*),.*/$1/;
+    $numTracks = $_;
+  }
+  else {
+    print OLDOUT "rip: No cdparanoia or cdda2wav found on your system!\n";
+    &abort;
+  }
+
+  close( TEMP );
+
+  print OLDOUT " Done.\n";
+
+
+  # If we cannot find any tracks, assume there is no CD in $dev
+  # print an error and EXIT the script
+  if( $numTracks <= 0 ) {
+    print OLDOUT "rip: Could not find a CD in drive $dev\n";
+    open(STDOUT, ">&OLDOUT") or print("cannot duplicate stdout: $!\n") and exit(1);
+    open(STDERR, ">&OLDERR") or print("cannot duplicate stderr: $!\n") and exit(1);
+    print "\nrip: This is what the CD query gave me:\n\n";
+    system( $queryCommand );
+    system( "eject $dev" ) if $eject;
+    exit(2)
+  }
+
+
+  # Parse the tracks list given after the flags if ARGV is non-empty
+  # If ARGV is empty, we assume the user wishes to rip the entire CD
+  if( @ARGV ) {
+    print STDERR "DEBUG: \@ARGV: @ARGV\n" if $debug;
+
+    # Determine what tracks the user asked to be ripped
+    while( @ARGV > 0 and $ARGV[0] =~ /\d/ ) {
+      if( $ARGV[0] =~ /^\d{1,2}\-\d{1,2}$/ ) {     # USED DASHED FORMAT
+        ($start, $end) = split( /-/, $ARGV[0] );
+        @trackList = ( @trackList, ${start}..${end} );
+      }
+      elsif( $ARGV[0] =~ /^\d{1,2}$/ ) {           # USED SPACED FORMAT
+        @trackList = ( @trackList, $ARGV[0] );
+      }
+      else {
+        print OLDOUT ( "rip:  Sorry, cannot rip \"$ARGV[0]\"\n" );
+        &usage;
+      }
+
+      shift( @ARGV );
+
+      print STDERR "DEBUG: updating track list now: @trackList\n" if $debug;
+      print STDERR "DEBUG: \@ARGV: @ARGV\n" if $debug;
+    }
+  }
+  else {
+     if( $numTracks ge 1 ) {
+       @trackList = (1..$numTracks);
+     }
+     else {
+       print STDERR "DEBUG: an attempt was made to rip $numTracks tracks\n" if $debug;
+       print OLDOUT ( "rip:  cdparanoia found no tracks to rip on $dev\n" );
+       print OLDOUT ( "rip:  Perhaps there is no CD in the drive $dev\n" );
+       open(STDOUT, ">&OLDOUT") or print("cannot duplicate stdout: $!\n") and exit(1);
+       open(STDERR, ">&OLDERR") or print("cannot duplicate stderr: $!\n") and exit(1);
+       print "rip:  This is what \`cdparanoia -sQ -d \$dev\` gave to me:\n";
+       system( "cdparanoia -sQ -d $dev" );
+
+       exit( 9 );
+     }
+  }
+
+  # Make sure ARGV is empty (it better be by now or there are unknown args)
+  if( @ARGV ) {
+    print STDERR "DEBUG: unknown argument(s): @ARGV\n" if $debug;
+    print OLDOUT ( "\nrip:  unrecognized argument(s) in the command-line: @ARGV\n\n" );
+    &usage;
+  }
+
+  # Sort the list NUMERICALLY: $a and $b are passed to the mini-subroutine
+  # by perl and are local to that "block of code"
+  @trackList = sort { $a <=> $b } @trackList;
+
+  # Let the user know what tracks we plan to rip
+  if( @trackList != 0 and not($quiet) ) {
+    print OLDOUT ( "\n\nRipping these track(s):  @trackList\n\n" );
+    print STDERR "\nDEBUG: Going to rip these track(s):  @trackList\n\n" if $debug;
+  }
+}
+
+
+
+##########################################################################
+#                                                                        #
+# SUB: renameIfDuplicate                                                 #
+#                                                                        #
+#   Takes input in $_ and if the string already exists in @renameList    #
+#   a new name is created to replace the name found in $_. The return    #
+#   value is left in $_.                                                 #
+#                                                                        #
+##########################################################################
+
+sub renameIfDuplicate {
+  my $tempName;
+  my $newNum;
+  my $oldNum;
+  my $changed;
+  my $item;
+
+
+  $tempName = $_;
+  $newNum   = "2";
+  $oldNum   = "1";
+
+  print STDERR "DEBUG: \$tempName originally: $tempName\n" if $debug;
+
+  # Do not allow tracks to have the same name or the files will
+  # overwrite each other and we will lose any previous ones of that name
+  do {
+    $changed  = "";
+
+    foreach $item (@renameList) {
+      if( $tempName eq $item ) {
+        $tempName =~ s/\.$extension$//;
+        $tempName =~ s/_$oldNum$//;
+
+        if( $nounderscore ) {
+          $tempName = $tempName . " " . $newNum . "." . $extension;
+        }
+        else {
+          $tempName = $tempName . "_" . $newNum . "." . $extension;
+        }
+
+        $oldNum   = $newNum;
+        $newNum++;
+        $changed  = "true";
+      }
+    }
+
+    if( $changed ) {
+      print STDERR "DEBUG: \$newNum is $newNum and \$oldNum is $oldNum\n" if $debug;
+      print STDERR "DEBUG: \$tempName now: $tempName\n" if $debug;
+    }
+  } while( $changed );
+
+  $_ = $tempName;
+}
+
+
+##########################################################################
+#                                                                        #
+# SUB: cddbRename                                                        #
+#                                                                        #
+#   Setup the renameList variable by way of CDDB. Grab $artist and       #
+#   $title information as well for lazy/superlazy or tagging purposes.   #
+#                                                                        #
+##########################################################################
+
+sub cddbRename {
+  my $answer;
+  my $newName;
+  my $char;
+  my $result;
+  my $diskid;
+  my $total;
+  my $toc;
+  my %cd;
+
+
+  # Make sure we are reading from the correct device
+  $config{CD_DEVICE} = $dev;                        # Device that has the audio CD
+
+  # Get the names to rename MP3s/Oggs to, via CDDB
+
+  print STDERR "DEBUG: getting CDDB info\n" if $debug;
+  print OLDOUT ( "Connecting to CDDB..." );
+
+  # Allow CDDB_get.pm to have access to STDERR on the terminal
+  # i.e., don't redirect it's error messages to the /tmp/rip-stderr file,
+  # which lets the user see the error messages.
+  open(ERRFILE, ">&STDERR") or print OLDOUT ("cannot dup error file: $!\n") and exit(3);
+  open(STDERR, ">&OLDERR" ) or print OLDOUT ("cannot move STDERR: $!\n") and exit(3);
+
+  # Use CDDB_get/CDDB to do the dirty work here.
+  %cd = get_cddb( \%config );
+
+  # Redirect STDERR to the file once again.
+  open(STDERR, ">&ERRFILE") or print OLDOUT ("cannot reset STDERR: $!\n") and exit(3);
+  close(ERRFILE);
+
+  print OLDOUT ( " Done.\n" );
+
+  # Assume no title means CDDB lookup failed and we need to go to manual mode.
+  if( !defined $cd{title} ) {
+    print OLDOUT ( "rip:  Tried to do a CDDB lookup for a CD in $dev\n" );
+    print OLDOUT ( "rip:  No info received from CDDB.\n" );
+    print OLDOUT ( "rip:  Connection to CDDB may have failed.\n" );
+    print OLDOUT ( "rip:  CDDB lookup has been aborted.\n" );
+
+    # Let user choose how to handle this failure if possible.
+    print OLDOUT ( "\nrip:  Abort the rip or attempt to recover (a/R)? " );
+    $answer = <STDIN>;
+    &abort if $answer =~ /^[Aa]/;
+
+    print OLDOUT ( "rip:  Use GENERIC names or setup names MANUALLY (M/g)? " );
+    $answer = <STDIN>;
+
+    if( $answer =~ /^[Gg]/ ) {
+      print OLDOUT ( "rip:  Recovering by using generic naming convention.\n" );
+      $checkDatabase = "";
+      $renameTracks  = "";
+    }
+    else {
+      print OLDOUT ( "rip:  You will need to insert the information manually now.\n" );
+
+      print OLDOUT ( "\n\nArtist name? " );
+      chomp( $artist = <STDIN> );
+      print OLDOUT ( "Album title? " );
+      chomp( $title = <STDIN> );
+
+      $checkDatabase = "";
+      $renameTracks  = "true";
+    }
+  }
+  else {
+    print OLDOUT ( "\n\nArtist: $cd{artist}\n" );
+    print OLDOUT ( "Title:  $cd{title}\n" );
+    print OLDOUT ( "Genre:  $cd{cat}\n\n" );
+
+    # Print CDDB entries to user
+    foreach my $trackNum (@trackList) {
+      my $item = ${$cd{track}}[$trackNum-1];
+
+      if( $trackNum < 10 ) {
+        print OLDOUT ( "Track  $trackNum: $item\n" );
+      }
+      else {
+        print OLDOUT ( "Track $trackNum: $item\n" );
+      }
+    }
+
+    # Grab the CD info and get back to ripping.
+    if(  !( 0 == @trackList and not($lazy) )  ) {
+      # All non-word chars are removed in subroutine beLazy() to produce
+      # the subdirectory names like "TheDoors" from "The Doors"
+      # and are NOT removed here because the "-T/--tag" needs full, proper names.
+
+      $artist    = $cd{artist};
+      $title     = $cd{title};
+#     $numTracks = $cd{tno};  # Ignore. We grab this from the CD ourselves now. 
+      $cddb_id   = $cd{id};
+      $genre     = $cd{cat};
+
+      print STDERR "DEBUG: \$artist name set to $artist\n" if $debug;
+      print STDERR "DEBUG: album \$title set to $title\n" if $debug;
+      print STDERR "DEBUG: \$numTracks set to $numTracks\n" if $debug;
+
+      my $n = 1;
+      @renameList = ();
+
+      # Create the @renameList
+      foreach my $item ( @{$cd{track}} ) {
+        # Escape quotes in every instance: properNameList and renameList
+        $item =~ s/\"/\\\"/g;
+        $item =~ s/'/'\\''/g;
+        
+        # Remember what the name originally was
+        $properNameList[ $n - 1 ] = $item;
+
+        $_ = $item;
+      
+        if( not($nounderscore) ) {
+          s/\s+/_/g;
+        }
+
+        s/[\`\~\!\@\#\$\%\^\&\*\(\)\<\>\?\\\+\=\[\]\{\}\'\"\;\:\?\.\,]//g;
+        s/\.$extension$//;
+
+        $_ = $_ . "." . $extension; # Put argument in $_
+        &renameIfDuplicate;
+        $newName = $_;              # Grab return value from $_
+
+        # Make sure name is less than an arbitrary number of chars long
+        # so that it does not overflow an inodes' max filename length
+        # This is easily done by classical music CDDB entries!
+        if( length( $newName ) > 75 ) {
+          while( length($newName) > 75 ) {
+            $char = chop( $newName );
+          }
+
+          while( $char ne "_" and $char ne " " ) {
+            $char = chop( $newName );
+          }
+
+          $newName = $newName . "." . $extension;
+        }
+
+        # Finally we can add the new name to the rename list.
+        $renameList[ $n - 1 ] = $newName;
+
+        $n++;
+      }
+
+      # Ask the user if they want to manually change these track names.
+      print OLDOUT "\nWould you like to change these track names (y/N)? ";
+
+      $answer = <STDIN>;
+
+      if( $answer =~ /^[Yy]/ ) {
+        $renameTracks  = "true";
+      }
+    }
+
+    print STDERR "DEBUG: CDDB rename list: @renameList\n" if $debug;
+  }
+}
+
+
+
+##########################################################################
+#                                                                        #
+# SUB: manualRename                                                      #
+#                                                                        #
+#   Prompt the user, manually, to give the proper name for each track    #
+#   which is to be ripped to MP3, FLAC, WAV, or Ogg Vorbis.              #
+#                                                                        #
+##########################################################################
+
+sub manualRename {
+  my $answer;
+  my $newName;
+  my $num;
+  my $item;
+  my $doItAgain           = "true";
+  my $getNameFromNameList = "";
+
+
+  # If there exists a non-empty trackList, prompt for names for that list
+  if( @trackList > 0 ) {
+    print OLDOUT ( "\n\nNow taking the proper names for the output $extension files.\n" );
+
+    print OLDOUT ( "Do you want your CD back for a moment (Y/n)? " );
+    chomp( $answer = <STDIN> );
+
+    # This won't work without an "eject" version >= 2.0.x or so
+    if( not($answer =~ /^[Nn]/) ) {
+      system( "eject $dev" );
+    }
+
+    print OLDOUT ( "\n" );
+
+    # If we already got them from the CDDB, then get the names out of that list
+    if( $checkDatabase ) {
+      $getNameFromNameList = "true";
+    }
+    else {
+      @properNameList = ();
+    }
+
+
+    # Prompt the user to complete the rename list
+    while( $doItAgain ) {
+      @renameList = ();
+
+      # Do this for each track num we mean to rip
+      foreach $num (@trackList) {
+        my $doItAgain = "true";
+        my $answer    = "";
+
+        $newName = "";
+
+        while( $doItAgain ) {
+          # Pretty printing (aligns the >'s)
+          if( $num < 10 ){
+            print OLDOUT ( "<Rename track $num >  " );
+          }
+          else {
+            print OLDOUT ( "<Rename track $num>  " );
+          }
+
+          $doItAgain = "";
+
+          # Ask user if latest name is correct. First time: newName is ""
+          if( $getNameFromNameList && ($newName eq "") ) {
+            if( $properNameList[$num - 1] eq "" ) {
+              $properNameList[$num - 1] = "Unknown";
+            }
+
+            $newName = $properNameList[$num - 1];
+            print OLDOUT ( "$newName\n" );
+          }
+          else {
+            chomp( $newName = <STDIN> );
+          }
+
+          print OLDOUT ( "Is \"$newName\" correct (Y/n)? " );
+          chomp( $answer = <STDIN> );
+
+          if( $answer =~ /^[Nn]/ ) {
+            $doItAgain = "true";
+          }
+          else {
+            $doItAgain = "";
+          }
+
+          print OLDOUT ( "\n" );
+        }
+
+        # Remember what the user originally entered
+        $properNameList[ $num - 1 ] = $newName;
+
+        # Alter name given so that it is in a nice format
+        $newName =~ s/\.$extension$//;
+
+        if( not($nounderscore) ) {
+          $newName =~ s/\s+/_/g;
+        }
+
+        $newName =~ s/[\`\~\!\@\#\$\%\^\&\*\(\)\<\>\?\\\+\=\[\]\{\}\'\"\;\:\?\.\,]//g;
+        $newName = $newName . "." . $extension;
+
+        $_ = $newName;      # Put argument in $_
+        &renameIfDuplicate;
+        $newName = $_;      # Grab return value from $_
+
+        $renameList[ $num - 1 ] = $newName;
+      }
+
+      print OLDOUT ( "\nDone.\n\n\n" );
+
+      $num = 0;
+
+      my $maxLength = 0;
+
+      for( my $i = 0 ; $i < @properNameList ; $i++ ) {
+        if( length($properNameList[$i]) > $maxLength ) {
+          $maxLength = length($properNameList[$i]);
+        }
+      }
+
+      # Print the list we formed to the user
+      for( my $i = 0 ; $i < @properNameList ; $i++ ) {
+        if( $properNameList[$i] ) {
+          $num = $i + 1;
+
+          if( $num < 10 ) {
+            print OLDOUT ( "Track  $num: $properNameList[$i]" );
+          }
+          else {
+            print OLDOUT ( "Track $num: $properNameList[$i]" );
+          }
+
+          my $amount = $maxLength - length($properNameList[$i]);
+
+          for( my $i = 0 ; $i <= $amount ; $i++ ) { print OLDOUT " "; }
+
+          print OLDOUT ( "($renameList[$i])\n" );
+        }
+      }
+
+      # Confirm the list with the user
+      print OLDOUT ( "\nAre these the right names (Y/n)?  " );
+      chomp( $answer = <STDIN> );
+      print OLDOUT ( "\n" );
+
+      if( $answer =~ /^[Nn]/ ) {
+        $getNameFromNameList = "true";
+        $doItAgain = "true";
+      }
+      else {
+        $doItAgain = "";
+      }
+    }
+
+    print STDERR "DEBUG: manual rename list: @renameList\n" if $debug;
+
+    print OLDOUT ( "Make sure the CD is in the tray and hit <ENTER>." );
+    <STDIN>;  # Block until user hits <Enter> (or any other key)
+
+    # This won't work without an "eject" version >= 2.0.x or so
+    system( "eject --trayclose $dev" );
+
+    print OLDOUT ( "\n\n" );
+  }
+}
+
+
+
+##########################################################################
+#                                                                        #
+# SUB: beLazy                                                            #
+#                                                                        #
+#   Using CDDB info, make a dir in the current working dir with the name #
+#   given in the artist field, setup the trackList to rip, and create a  #
+#   playlist that XMMS could use in the "artist's" dir.                  #
+#                                                                        #
+#   This entire section of code assumes you have already called the      #
+#   subroutine "cddbRename" prior to this point.                         #
+#                                                                        #
+##########################################################################
+
+sub beLazy {
+  my $tempArtist;
+  my $tempTitle;
+
+
+  # Make sure we know the artist and album title for this CD
+  if( !$artist ) {
+    print OLDOUT ( "Artist?  -> " );
+    chomp( $artist = <STDIN> );
+  }
+
+  if( !$title ) {
+    print OLDOUT ( "Album?   -> " );
+    chomp( $title = <STDIN> );
+  }
+
+  $tempArtist = $artist;
+  $tempTitle  = $title;
+
+  # Alter the copies of $artist and $title, making them useful for dir names
+  $tempArtist =~ s/[\s\W]//g;
+  $tempTitle  =~ s/[\s\W]//g;
+
+  # Rip the entire CD unless @trackList is already defined
+  if ($#trackList==-1) {
+    @trackList = (1..$numTracks);
+  }
+
+  # Setup the output subdir based on the $artist's name and/or album $title
+  # NOTE: $subDir MUST end in "/" so that naming works properly!
+  if( $superlazy ) {
+    $subDir = "$tempArtist/$tempTitle/";
+  }
+  else {
+    $subDir = "$tempArtist/";
+  }
+
+  $subDir =~ s/\/\//\//g;
+  $subDir =~ s/\/\//\//g;
+
+  if(  not( -e "$pwd/$subDir" ) ) {
+    system( "mkdir -p \"$pwd/$subDir\"" );
+
+    print STDERR "DEBUG: tried to create dir $pwd/$subDir\n" if $debug;
+
+    if(  not( -e "$pwd/$subDir" ) or not( -w "$pwd/$subDir" )  ) {
+      print OLDOUT ( "Either the output directory $pwd/$subDir cannot be created\n" );
+      $subDir = "";
+      print OLDOUT ( "or it is not writable. Output will be to $pwd/$subDir instead.\n" );
+      print OLDOUT ( "Likely there is a file with the name $pwd/$subDir already in $pwd.\n" );
+    }
+  }
+
+  print STDERR "DEBUG: \$pwd/\$subdir/ set to $pwd/$subDir\n" if $debug;
+}
+
+
+
+##########################################################################
+#                                                                        #
+# SUB: getTagInfo                                                        #
+#                                                                        #
+#   Prompt the user for tagging information such as $artist and $title.  #
+#   Set GLOBAL variables with this information for sub encode's use  .   #
+#                                                                        #
+##########################################################################
+
+sub getTagInfo {
+  my $answer;
+
+  print OLDOUT "\nNeed Tag Info:\n\n";
+
+  # Artist
+  if( $artist ) {
+    print OLDOUT ( "Artist?  -> $artist\nIs this name ok (Y/n)? " );
+    chomp( $answer = <STDIN> );
+  }
+
+  if(  !$artist or ($answer =~ /^[Nn]/)  ) {
+    print OLDOUT ( "Artist?  -> " );
+    chomp( $artist = <STDIN> );
+  }
+
+  print OLDOUT "\n";
+
+  # Album title
+  if( $title ) {
+    print OLDOUT ( "Album?   -> $title\nIs this title ok (Y/n)? " );
+    chomp( $answer = <STDIN> );
+  }
+
+  if(  !$title or ($answer =~ /^[Nn]/)  ) {
+    print OLDOUT ( "Album?   -> " );
+    chomp( $title = <STDIN> );
+  }
+
+  print OLDOUT "\n";
+
+  if( $tagIt ) {
+    # Year
+    if( $year ) {
+      print OLDOUT ( "Year?    -> $year\nIs this year ok (Y/n)? " );
+      chomp( $answer = <STDIN> );
+    }
+
+    if(  !$year or ($answer =~ /^[Nn]/)  ) {
+      print OLDOUT ( "Year?    -> " );
+      chomp( $year = <STDIN> );
+    }
+
+    print OLDOUT "\n";
+
+    # Genre
+    if( $genre ) {
+      print OLDOUT ( "Genre?   -> $genre\nIs this genre ok (Y/n)? " );
+      chomp( $answer = <STDIN> );
+    }
+
+    if(  !$genre or ($answer =~ /^[Nn]/)  ) {
+      print OLDOUT ( "Genre?   -> " );
+      chomp( $genre = <STDIN> );
+    }
+  }
+
+  print STDERR "DEBUG: \$artist set to $artist\n";
+  print STDERR "DEBUG: \$title  set to $title\n";
+  print STDERR "DEBUG: \$year   set to $year\n";
+  print STDERR "DEBUG: \$genre  set to $genre\n";
+}
+
+
+
+##########################################################################
+#                                                                        #
+# SUB: encode                                                            #
+#                                                                        #
+#   Based upon what GLOBAL variables have been set, encode the given     #
+#   tracks to MP3, Ogg Vorbis, FLAC or WAV one at a time. This saves     #
+#   hard drive space compared to ripping all tracks to WAV first and     #
+#   then encoding.                                                       #
+#                                                                        #
+##########################################################################
+
+sub encode {
+  my $encoderFlagsPrefix;
+  my $song;
+  my $filenameToUse;
+  my $track;
+  my $result;
+  my $answer;
+  my $comment   = "";
+  my $encodeDate;
+  my $titleTemp = "playlist";
+
+
+  # Setup playlist if we are lazy or requested it
+  if( $lazy or $superlazy or $playlist ) {
+    # Figure out what the playlist file should be named
+    # Bow to user's request if $playlist has been set by -g/--generate flag
+    if( $playlist ) {
+      # Playlist is placed underneath the initial present working directory (pwd) 
+      $playlist = "$DEFAULT_DIR/$playlist";
+      system( "touch $playlist" ) if( !(-e "$playlist") );
+    }
+    # Or if we know what the album title is, then try to use that
+    elsif( $title ) {
+      $titleTemp = $title;
+      $titleTemp =~ s/[\s\W]//g;
+
+      $playlist = "$pwd/$titleTemp.m3u";
+    }
+    # Otherwise, we have no idea what to name the playlist; use something default
+    else {
+      $playlist = "$pwd/$titleTemp.m3u";
+    }
+
+    open(PLAYLIST, ">$playlist") or print OLDOUT ("rip:  can't open playlist $playlist: $!\n") and exit(5);
+    print STDERR "DEBUG: playlist filename: $playlist\n" if $debug;
+  }
+
+
+  # Used by Ogg Vorbis tagging code so that it can swap in
+  # different tagging args, but have the same prefix each time.
+  $encoderFlagsPrefix = $encoderFlags;
+
+
+  # Prompt for tag info if the user wants to tag the files
+  if( $tagIt or $format ) {
+    &getTagInfo;
+  }
+  else {
+    print STDERR "DEBUG: no tagging will be done\n";
+  }
+
+
+  # Make a copy of the stderr output file descriptor (in case of verbose flag)
+  open(ERRFILE, ">&STDERR") or print("cannot duplicate stderr: $!\n") and exit(1);
+
+  print OLDOUT "\nRipper:        $ripperPath[$ripper]\n";
+  print OLDOUT   "Ripper flags:  $ripperFlags\n";
+  print OLDOUT   "Encoder:       $encoderPath[$encoder]\n";
+  print OLDOUT   "Encoder flags: $encoderFlags\n";
+  print OLDOUT   "Output dir:    $pwd/$subDir\n\n";
+
+  # Always dump this information to STDERR
+  print STDERR "\nRipper:        $ripperPath[$ripper]\n";
+  print STDERR   "Ripper flags:  $ripperFlags\n";
+  print STDERR   "Encoder:       $encoderPath[$encoder]\n";
+  print STDERR   "Encoder flags: $encoderFlags\n";
+  print STDERR   "Output dir:    $pwd/$subDir\n\n";
+
+  if( $verbose ) {
+    # Allow the user to see any errors written to STDERR by the ripper or encoder
+    open(STDERR, ">&OLDERR") or print("cannot duplicate stderr: $!\n") and exit(1);
+  }
+
+  # Make child processes (ripper and encoder) quiet if not in verbose mode
+  # Do not do this if this is >= to the 2nd pass thru this subroutine
+  if( not($verbose) and not($secondpass) ) {
+    # Make sure $ripper is quiet
+    if( not($ripperFlags =~ /$ripperQUIET/) ) {
+      $ripperFlags = $ripperFlags  . $ripperQUIET;
+    }
+
+    # Make sure $encoder is quiet
+    if( not($encoderFlags =~ /$encoderQUIET/) ) {
+      $encoderFlags = $encoderFlags . $encoderQUIET;
+    }
+
+    # Redirect STDOUT to STDERR (which is itself redirected to a file)
+    close(STDOUT) and open(STDOUT, ">&STDERR") or print OLDOUT ("cannot copy STDERR\n") and exit(2);
+  }
+
+  print OLDOUT "\n" if not($quiet) and (@trackList > 0);
+
+
+  # MAIN FOR-LOOP
+
+  # Rip CD tracks to MP3, Ogg Vorbis, FLAC, or WAV depending on flags set
+  foreach $track ( @trackList ) {
+    $comment = "";  # Do not accumulate comments
+
+    if( $track =~ /^\d{1,2}$/ ) {
+      # Prompt for comment tag for this track if user wants
+      if( $tagWithComments ) {
+        print OLDOUT "\nComment tag for track $track? -> ";
+        chomp( $comment = <STDIN> );
+        print OLDOUT "\n";
+      }
+
+      # Let the user know what is being ripped this iteration (pretty printing based on track #)
+      if( $track < 10 ) {
+        print OLDOUT "Now ripping CD track $track to $extension...  ";
+      }
+      else {
+        print OLDOUT "Now ripping CD track $track to $extension... ";
+      }
+
+      print OLDOUT "\n" if $verbose and not($encoder == $lame);
+
+      # Get the track's name
+      if( $renameTracks or $checkDatabase ) {
+        $filenameToUse = $renameList[ $track - 1 ];
+      }
+      else {
+        $filenameToUse = "track" . $track . "." . $extension;
+      }
+
+      $song = $filenameToUse;
+      $song =~ s/_/ /g;
+      $song =~ s/\.$extension$//;
+
+      # Adjust filename we will use to have a specific format
+      if( $format ) {
+        $filenameToUse = $format;
+        $filenameToUse =~ s/\%A/$artist/g;
+
+        if( $track < 10 ) {
+          $filenameToUse =~ s/\%N/0$track/g;
+        }
+        else {
+          $filenameToUse =~ s/\%N/$track/g;
+        }
+
+        $filenameToUse =~ s/\%T/$title/g;
+        $filenameToUse =~ s/\%S/$song/g;
+      }
+
+      # Strip out non-word characters still existant in the filename $filenameToUse
+      # perhaps due to an odd manual rename or a forced filename length reduction
+      $filenameToUse =~ s/\.$extension$//;
+      $filenameToUse =~ s/ /_/g if not($nounderscore);
+      # Need to leave certain chars alone, hence the ugly s///g
+      $filenameToUse =~ s/[\`\~\!\@\#\$\%\^\&\*\(\)\<\>\?\\\/\+\=\[\]\{\}\'\"\;\:\?\.\,]//g;
+      $filenameToUse .= ".$extension";
+
+      print PLAYLIST ( "$pwd/${subDir}$filenameToUse\n" ) if( $lazy or $superlazy or $playlist );
+      print STDERR "DEBUG: added $pwd/${subDir}$filenameToUse\n" if( $debug and ($lazy or $superlazy or $playlist) );
+
+
+      $encodeDate = strftime "%Y-%m-%d", gmtime;
+
+      # Determine the proper human-readable name for the song
+      if( @properNameList > 0 ) {
+        $song = $properNameList[ $track - 1 ];
+      }
+
+      # If we are tagging an Ogg Vorbis file, set up the flags now (oggenc only)
+      if( $tagIt and $extension eq "ogg" ) {
+        $encoderFlags = $encoderFlagsPrefix .
+                          " -t \'$song\'" .
+                          " -a \'$artist\'" .
+                          " -l \'$title\'" .
+                          " -N \'$track\'" .
+                          " -d \'$year\'" .
+                          " -c \'description=$comment\'" .
+                          " -c \'genre=$genre\'" .
+                          " -c \'encode_date=$encodeDate\'" .
+                          " -c \'cddb_id=$cddb_id\'";
+      }
+
+
+      # Do the actual CD rip to...
+      if( $wavONLY ) {
+        print STDERR "\nDEBUG: $ripperPath[$ripper] $ripperFlags $ripperTRACK $track \"$out\" && " .
+                              " mv \"$out\" \"$pwd/${subDir}$filenameToUse\"\n";
+
+        # ...WAV format (blocking system call)
+        # YES, those extra quotes are extremely important!
+        $result = system( "$ripperPath[$ripper] $ripperFlags $ripperTRACK $track \"$out\" && " .
+                          " mv \"$out\" \"$pwd/${subDir}$filenameToUse\"" );
+      }
+      else {
+        print STDERR "\nDEBUG: $ripperPath[$ripper] $ripperFlags $ripperTRACK $track - | " .
+                              " $encoderPath[$encoder] $encoderFlags $in \"$out\" && " .
+                              " mv \"$out\" \"$pwd/${subDir}$filenameToUse\"\n";
+
+        # ...MP3, FLAC, or Ogg Vorbis (blocking system call)
+        # YES, those extra quotes are extremely important!
+        $result = system( "( $ripperPath[$ripper] $ripperFlags $ripperTRACK $track - | " .
+                          " $encoderPath[$encoder] $encoderFlags $in \"$out\" ) && " .
+                          " mv \"$out\" \"$pwd/${subDir}$filenameToUse\"" );
+      }
+
+      # Call signal handler if system call did not finish error free
+      if( $result != 0 ) {
+        print STDERR "DEBUG: system call went down on signal $result\n" if $debug;
+        print OLDOUT "\nrip:  rip and encode system call was interrupted unexpectedly\n";
+        &signalHandler;
+      }
+
+      # Tag an MP3 with ID3v1 info if flagged
+      if(  $tagIt and ($extension eq "mp3" or $extension eq "flac")  ) {
+        my $file = "$pwd/${subDir}$filenameToUse";
+
+        print STDERR "DEBUG: tagging \"$file\"\n" if $debug;
+        print STDERR "DEBUG: \"$song\", \"$artist\", \"$title\", \"$year\",
+                             \"$comment\", \"$genre\", \"$track\"\n" if $debug;
+
+        set_mp3tag( $file, $song, $artist, $title, $year, $comment, $genre, $track );
+      }
+
+      # Play the ripped file if so flagged
+      if( $play and $track == $trackList[0] ) {
+        print OLDOUT "Playing   $song\n" if not($quiet);
+        system( "xmms --play \"$pwd/${subDir}$filenameToUse\" &" );
+        print STDERR "DEBUG: doing:  xmms --play \"$pwd/${subDir}$filenameToUse\" & \n" if $debug;
+        print OLDOUT "\n" if $verbose;
+      }
+      elsif( $play ) {
+        print OLDOUT "Enqueuing $song\n" if not($quiet);
+        system( "xmms --enqueue \"$pwd/${subDir}$filenameToUse\" &" );
+        print STDERR "DEBUG: doing:  xmms --enqueue \"$pwd/${subDir}$filenameToUse\" & \n" if $debug;
+        print OLDOUT "\n" if $verbose;
+      }
+      else {
+        # Do not play anything
+      }
+
+      print OLDOUT "Done.\n" if( not($verbose) and not($quiet) and not($play) );
+      print OLDOUT "\n" if( $verbose and not($play) );
+    }
+    else {
+       print OLDOUT "Track to rip argument was syntactically incorrect: $track\n\n";
+       print OLDOUT "An example of legal syntax is:   rip 2-5 7 8 10-13 15\n";
+       &terminate;
+    }
+  }
+
+  # Pretty printing
+  if( @trackList > 0 ) {
+    print OLDOUT "\n" if not($quiet);
+  }
+
+  # Finished with CD. It is safe to now eject the CD tray, if so flagged
+  if( $eject ) {
+    print OLDOUT "Ejecting CD tray... " if not($quiet);
+    system( "eject $dev" );
+    print OLDOUT "Done.\n" if not($quiet);
+  }
+
+  # Finished with the playlist
+  close( PLAYLIST ) if( $lazy or $superlazy or $playlist );
+
+  # Do you want to go around again?
+  if( $batchmode ) {
+    print OLDOUT "Do you want to rip another CD [Y/n]? ";
+    $answer = <STDIN>;
+  }
+  else {
+    $answer = "No";
+  }
+
+  # If we do not, stop main's while loop
+  if( $answer =~ /^[nN]/ ) {
+    $loop = "";
+  }
+  else {
+    # Get a new CD into the tray
+    system( "eject $dev" );
+    print OLDOUT "\n\nHit <ENTER> when new CD is in the tray ";
+    <STDIN>;  # Wait for enter to be hit
+    print OLDOUT "\n\n";
+    system( "eject --trayclose $dev" );
+
+    # Figure out what tracks to rip
+    print OLDOUT "Rip all the tracks on the CD [Y/n]? ";
+    $answer = <STDIN>;
+
+    if( $answer =~ /^[nN]/ ) {
+      print OLDOUT "Answer using a list, for example: 1-4 6 8 9-11 13\n";
+      print OLDOUT "What tracks do you want to rip? ";
+      $answer = <STDIN>;
+      @ARGV = split( '\s', $answer );
+    }
+
+    # Clear the track list, redirect stderr to stderr output file, and truncate the error file 
+    @trackList = ();
+    open(STDERR, ">&ERRFILE") or print("cannot duplicate stderr: $!\n") and exit(1) if $verbose;
+    truncate( ERRFILE, 0 ) or print OLDOUT ( "rip: could not truncate temp file: $!\n" ) and exit(3);
+    $secondpass = "true";
+  }
+}
+
+
+
+##########################################################################
+#                                                                        #
+# SUB: usage                                                             #
+#                                                                        #
+#   Prints a usage message for rip and exits.                            #
+#                                                                        #
+##########################################################################
+
+sub usage {
+  print("\nUSAGE: rip [option(s)] <track(s)>\n"                                             );
+  print("\nOPTIONS:\n\n"                                                                    );
+  print("  -b   --bitrate NUM          set bitrate for encoding to NUM kbps\n"              );
+  print("  -B   --bladeenc             use bladeenc for MP3 encoding\n"                     );
+  print("  -c   --cddb                 use CDDB to rename output files (must be online)\n"  );
+  print("  -C   --comment              add your comments to each track via file tagging\n"  );
+  print("  -d   --dev DEV              force input to come from device DEV\n"               );
+  print("  -D   --debug                leave debug info in the file $STDERRFile\n"          );
+  print("  -e   --eject                eject CD tray after doing everything else\n"         );
+  print("  -f   --format FORMAT        use FORMAT when naming the output file\n"            );
+  print("\n                                      \%A   artist name\n"                       );
+  print("                                      \%T   title of album\n"                      );
+  print("                                      \%S   song name\n"                           );
+  print("                                      \%N   track number\n\n"                      );
+  print("                              example:   rip -f \"\%A - \%T - \%N - \%S\"\n"       );
+  print("                              example:   rip -f \"\%A_-_\%S\"\n\n"                 );
+  print("  -F   --flac                 use FLAC for lossless compression\n"                 );
+  print("  -g   --generate DIR/NAME    playlist NAME created in DIR (DIR may be omitted)\n" );
+  print("  -G   --gogo                 use GOGO for MP3 encoding\n"                         );
+  print("  -h   --help                 print this help to the screen\n"                     );
+  print("  -l   --lazy                 uses -t, -c, -g, -b/q, -m, and -e implicitly,\n"     );
+  print("                              creates a playlist in \$PWD in a common format,\n"   );
+  print("                              moves output audio files to \$PWD/ArtistName/\n"     );
+  print("  -L   --lame                 use LAME for MP3 encoding\n"                         );
+  print("  -m   --move DIR             place all of the ripped/encoded tracks in DIR\n"     );
+  print("  -M   --many                 rip many CDs one after the other (loop thru script)\n");
+  print("  -n   --nounderscore         do NOT use an underscore '_' in filenames\n"         );
+  print("  -N   --notlame              use notlame for MP3 encoding\n"                      );
+  print("  -O   --oggenc               use oggenc and encode to Ogg Vorbis files\n"         );
+  print("  -p   --paranoia             use 160 kbps and do not accept skips on rip\n"       );
+  print("  -P   --play                 play finished files in XMMS during rip\n"            );
+  print("  -q   --quality NUM          use variable bitrate encoding with quality NUM\n"    );
+  print("                              only works when LAME or oggenc is the encoder\n"     );
+  print("                              see that encoder's documentation when choosing NUM\n");
+  print("  -Q   --quiet                rip and encode tracks without any visible output\n"  );
+  print("  -r   --rename               ask for proper name of all tracks before ripping\n"  );
+  print("  -s   --speed NUM            force CD-ROM device to read at speed NUM\n"          );
+  print("  -S   --superlazy            same functionality as -l/--lazy except that all\n"   );
+  print("                              output is to \$PWD/ArtistName/AlbumTitle/ instead\n" );
+  print("  -t   --trayclose            close CD tray before doing anything else\n"          );
+  print("  -T   --tag                  tag the output file with artist/song/album info\n"   );
+  print("  -v   --verbose              print lots of info about what script is doing\n"     );
+  print("  -V   --version              print rip's version information\n"                   );
+  print("  -w   --wav                  rip CD tracks to WAV files and no further\n"         );
+  print("  -Y   --cdparanoia           rip CDs using cdparanoia (this is the default)\n"    );
+  print("  -Z   --cdda2wav             rip CDs using cdda2wav instead of cdparanoia\n"      );
+  print("\nEXAMPLES:\n\n"                                                                   );
+  print("  rip 1 3-5 7 9-11 12 14      rip tracks 1 3 4 5 7 9 10 11 12 and 14 to MP3\n"     );
+  print("  rip 6                       rip track 6 to MP3 using default encoder\n"          );
+  print("  rip -c 6                    rip track 6 and rename its MP3 file via CDDB\n"      );
+  print("  rip -c -d /dev/dvd 6        rip using /dev/dvd as the input device\n"            );
+  print("  rip -c -m ~/mp3 6           simliar: moves output MP3 files to dir ~/mp3\n"      );
+  print("\nNORMAL USAGE:\n\n"                                                               );
+  print("  rip -P                      rip entire CD to MP3 and play tracks as we go\n"     );
+  print("  rip -Pet                    similar: also closes and ejects CD tray\n"           );
+  print("  rip -S                      laziness at its best IMHO (must be online)\n"        );
+  print("  rip -S 1 3-5 7 12           superlazy rip specific tracks\n"                     );
+  print("  rip -TOPS                   similar: also tags, uses oggenc, and plays\n\n"      );
+  print("  If you do not specify which track numbers to rip, then all tracks are ripped.\n" );
+  print("  You may now specify a subset of tracks to rip during a lazy rip\n\n"             );
+  print("  The default output directory is the Present Working Directory (\$PWD).\n"        );
+  print("  Use -m/--move to alter/change the \$PWD to a different directory, DIR.\n"        );
+  print("  If the DIR you give -m/--move doesn't exists, rip will create it for you.\n\n"   );
+  print("  If no specific encoder is flagged, rip uses the first encoder it finds.\n"       );
+  print("  Encoders are searched in this order: gogo, lame, bladeenc, oggenc, flac, notlame.\n" );
+  print("\n                     http://rip.sourceforge.net\n\n"                             );
+  print("  Copyright (C) 2003 by Gregory J. Smethells and licensed under the GPL\n\n"       );
+
+  &terminate;
+}
+
+
+
+##########################################################################
+#                                                                        #
+# SUB: abort                                                             #
+#                                                                        #
+#   Prints error messages if either a CD Ripper or an Encoder is not     #
+#   present on the $PATH, then exits.                                    #
+#                                                                        #
+##########################################################################
+
+sub abort {
+  if( $ripper == $NOT_FOUND ) {
+    print OLDOUT ( "\nrip:  WARNING: A CD ripper was *not* found on your \$PATH\n"    );
+    print OLDOUT ("rip:  you can download one from http://www.xiph.org/paranoia/\n\n" );
+  }
+
+  if( $encoder == $NOT_FOUND ) {
+    print OLDOUT ( "\nrip:  WARNING: An encoder was *not* found on your \$PATH\n" );
+    print OLDOUT ("rip:  you can download one from http://www.mp3dev.org/mp3/\n\n"        );
+  }
+
+  exit(8);
+}
+
+
+
+##########################################################################
+#                                                                        #
+# SUB: terminate                                                         #
+#                                                                        #
+#   Exits script normally. Removes debug file if we are not debugging.   #
+#                                                                        #
+##########################################################################
+
+sub terminate {
+  system( "rm -f \"$STDERRFile\"" ) if not($debug);
+  exit(0);
+}
+
+
+
+
+##########################################################################
+#                                                                        #
+# MAIN SCRIPT                                                            #
+#                                                                        #
+##########################################################################
+
+
+&readRCFile;                          # First read the run-command file
+&setupSystem;                         # Then make sure the system is ready to rip a CD
+&findTools;                           # Finally see what tools are available on the $PATH
+
+# If either a ripper or an encoder is NOT found, abort the rip
+($ripper == $NOT_FOUND or $encoder == $NOT_FOUND) and &abort;
+
+&parseFlags;                          # First parse all arguments given on the command-line
+&setupInternalFlags;                  # Next set ripper and encoder tool's flag vars to their proper values
+&handleOptions;                       # Then handle any internal setup due to flags from the command-line
+
+while( $loop ) {
+  &parseTracks;                       # Finally, determine what tracks to rip
+
+  &cddbRename       if $checkDatabase;
+  &manualRename     if $renameTracks;
+  &beLazy           if ($lazy or $superlazy);
+
+  &encode;                            # Last, but not least: rip and encode the tracks
+}
+
+close( STDERR );
+close( OLDERR );
+
+&terminate;                           # And terminate our execution cleanly
+
