@@ -133,7 +133,7 @@ $config{CD_DEVICE}  = $dev;                       # Device that has the audio CD
 $config{CDDB_HOST}  = "freedb.freedb.org";        # CDDB host to find the server on
 $config{CDDB_PORT}  = 888;                        # CDDB port the CDDB server is using
 $config{CDDB_MODE}  = "http";                     # CDDB mode can be: cddb, http
-$config{input}      = 1;                          # User interaction: 1 = true, 0 = false
+$config{input}      = 0;                          # User interaction: 1 = true, 0 = false
 $config{HELLO_ID}   = "greg my.net rip $version"; # HELLO string to give CDDB server
 
 $config{HTTP_PROXY} = $ENV{HTTP_PROXY} if $ENV{HTTP_PROXY}; # Use HTTP proxy if it exists in environ
@@ -198,6 +198,7 @@ my $eject             = "";                       # True if we should eject cd t
 my $debug             = "";                       # True if debugging should be on
 my $generate          = "";                       # True if we should generate a playlist
 my $help              = "";                       # True if help screen is to be printed
+my $interactive       = "";                       # True if interactive mode is enabled for CDDB
 my $speed;                                        # CD read rate         (used by -s/--speed)
 my $lazy              = "";                       # True if lazy should be done
 my $newPWD            = $pwd;                     # New PWD path  (used by -m/--move)
@@ -603,6 +604,7 @@ sub parseFlags {
               "generate=s" => \$options{g},
               "gogo"       => \$encoderChoice[$gogo],
               "help"       => \$options{h},
+              "interactive" => \$options{i},
               "lazy"       => \$options{l},
               "lame"       => \$encoderChoice[$lame],
               "move=s"     => \$options{m},
@@ -636,6 +638,7 @@ sub parseFlags {
   $format              = $options{f} if $options{f};
   $playlist            = $options{g} if $options{g};
   $help                = $options{h} if $options{h};
+  $interactive         = $options{i} if $options{i};
   $lazy                = $options{l} if $options{l};
   $newPWD              = $options{m} if $options{m};
   $nounderscore        = $options{n} if $options{n};
@@ -746,6 +749,8 @@ sub parseFlags {
     }
   }
 
+  # XXX: How about some fucking loops?
+
   print STDERR "\n\nDEBUG: OPTIONS NOW SET INCLUDE:\n\n";
   print STDERR "DEBUG: \$kbps                = $kbps\n" if $kbps;
   print STDERR "DEBUG: \$checkDatabase       = $checkDatabase\n" if $checkDatabase;
@@ -756,6 +761,7 @@ sub parseFlags {
   print STDERR "DEBUG: \$format              = $format\n" if $format;
   print STDERR "DEBUG: \$playlist            = $playlist\n" if $playlist;
   print STDERR "DEBUG: \$help                = $help\n" if $help;
+  print STDERR "DEBUG: \$interactive         = $interactive\n" if $interactive;
   print STDERR "DEBUG: \$lazy                = $lazy\n" if $lazy;
   print STDERR "DEBUG: \$batchmode           = $batchmode\n" if $batchmode;
   print STDERR "DEBUG: \$newPWD              = $newPWD\n" if $newPWD;
@@ -986,6 +992,10 @@ sub handleOptions {
   # Print the help screen and exit
   if( $help ) {
     &usage;    # EXIT!
+  }
+
+  if( $interactive ) {
+     $config{input} = 1;
   }
 
 
@@ -1501,13 +1511,15 @@ sub cddbRename {
         $n++;
       }
 
-      # Ask the user if they want to manually change these track names.
-      print OLDOUT "\nWould you like to change these track names (y/N)? ";
+      if ($interactive) {
+         # Ask the user if they want to manually change these track names.
+         print OLDOUT "\nWould you like to change these track names (y/N)? ";
 
-      $answer = <STDIN>;
+         $answer = <STDIN>;
 
-      if( $answer =~ /^[Yy]/ ) {
-        $renameTracks  = "true";
+         if( $answer =~ /^[Yy]/ ) {
+            $renameTracks  = "true";
+         }
       }
     }
 
@@ -2174,6 +2186,7 @@ sub usage {
   print("  -g   --generate DIR/NAME    playlist NAME created in DIR (DIR may be omitted)\n" );
   print("  -G   --gogo                 use GOGO for MP3 encoding\n"                         );
   print("  -h   --help                 print this help to the screen\n"                     );
+  print("  -i   --interactive          Let CDDB process involve interactive prompting\n"    );
   print("  -l   --lazy                 uses -t, -c, -g, -b/q, -m, and -e implicitly,\n"     );
   print("                              creates a playlist in \$PWD in a common format,\n"   );
   print("                              moves output audio files to \$PWD/ArtistName/\n"     );
