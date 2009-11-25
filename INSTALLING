@@ -11,6 +11,10 @@ or flac are not installed and available on your PATH.
 Also, the Perl modules MP3::Info and CDDB_get need to 
 be installed before the script will even run.
 
+  If you are on a Debian derived distro (such as Ubuntu) 
+  you can probably get by with:
+    apt-get install cdparanoia libmp3-info-perl libcddb-get-perl lame
+
   Note, to find out what dirs are on your PATH, do the
 following at a shell prompt:
 
