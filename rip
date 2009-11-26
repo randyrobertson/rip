@@ -811,8 +811,11 @@ sub setupInternalFlags {
     $ripperDEVICE     = " -d ";
     $ripperPARANOIA   = " -z3 ";       # Third times the charm
     $ripperQUERY      = " -sQ ";
-
-    $ripperFlags      = " ";            # Default cdparanoia flags
+    if ( $paranoia ) {
+       $ripperFlags      = " ";            # Default cdparanoia flags
+    } else {
+       $ripperFlags      = " -Z";          # Disable paranoia by default
+    }
   }
   elsif( $ripper == $cdda2wav ) {
     # Used by encode() mostly 
